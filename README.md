@@ -18,12 +18,18 @@ TODO: Fill out this long description.
 ## Install
 
 ```
+go get -u github.com/Bit-Nation/chat-backend/server
 ```
 
 ## Usage
+```
+import "github.com/Bit-Nation/chat-backend/server"
+```
 
-```
-```
+This package is under contruction.
+It might not be fully usable in it's current state.
+To get an idea on how to use it, check server_test.go 
+
 
 ## Maintainers
 
