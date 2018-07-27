@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"io"
 	"net/http"
-	"strings"
 	"testing"
 
 	"github.com/Bit-Nation/panthalassa/keyManager"
@@ -243,7 +242,7 @@ func (c *Client) testSendMessage(t *testing.T, receiverPreKeyBundlePublic PreKey
 	identityPublicKeySenderHex, identityPublicKeySenderHexErr := keyManagerSender.IdentityPublicKey()
 	require.Nil(t, identityPublicKeySenderHexErr)
 	// Create a new 25519 curve for the message Sender
-	curveSender := x3dh.NewCurve25519(strings.NewReader("ONLY DO THIS FOR TESTING"))
+	curveSender := x3dh.NewCurve25519(rand.Reader)
 	// Create a new x3dh for Sender using the 25519 curve and the message Sender chat id key pair
 	x3dhSender := x3dh.New(&curveSender, sha256.New(), "testing", chatIDKeyPairSender)
 	// Initialize xh3d protocol from the Sender side

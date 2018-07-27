@@ -49,7 +49,7 @@ func HandleWebsocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 		return
 	}
 	// Prepare to upgrade the HTTP connection to a WebSocket connection
-	httpConnectionUpgrader := websocket.Upgrader{} //
+	httpConnectionUpgrader := websocket.Upgrader{}
 	// Upgrade the HTTP connection to a WebSocket connection
 	websocketConnection, websocketConnectionErr := httpConnectionUpgrader.Upgrade(serverHTTPResponse, clientHTTPRequest, nil)
 	if websocketConnectionErr != nil {
@@ -240,7 +240,7 @@ func deliverRequestedPreKeyBundle(websocketConnection *websocket.Conn, requested
 	messageToClientProtobuf.Response.PreKeyBundle.Profile = &backendProtobuf.Profile{}
 	// Initialize an empty PreKey structure which would hold the requested SignedPreKey if it exists
 	messageToClientProtobuf.Response.PreKeyBundle.SignedPreKey = &backendProtobuf.PreKey{}
-	// Initialize an empty PreKey structure which would hold the requested SignedPreKey if it exists
+	// Initialize an empty PreKey structure which would hold the requested OneTimePreKey if it exists
 	messageToClientProtobuf.Response.PreKeyBundle.OneTimePreKey = &backendProtobuf.PreKey{}
 	// If a Profile which matches the client request exists in our backend storage
 	if singleUserProfile, ok := multiUserProfileStore[requestedPreKeyBundleString]; ok {
