@@ -82,11 +82,11 @@ func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 	} // if messagesToBeDelivered
 
 	// Try to process a message from the client
-	websocketConnectionProcessMessageErr := processMessage(websocketConnection, authenticatedIdentityPublicKeyHexClient)
+	websocketConnectionProcessMessageErr := processMessage(websocketConnection)
 	// For as long as we don't enounter an error while processing messages from the client
 	for websocketConnectionProcessMessageErr == nil {
 		// Process messages from the client
-		websocketConnectionProcessMessageErr = processMessage(websocketConnection, authenticatedIdentityPublicKeyHexClient)
+		websocketConnectionProcessMessageErr = processMessage(websocketConnection)
 	} // for websocketConnectionProcessMessageErr == nil
 	// Once we enounter an error while processing messages from the client
 	// Log the error we encountered
@@ -125,7 +125,7 @@ func sendErrorToClient(encounteredError error, websocketConnection *gorillaWebSo
 	return nil
 } // func sendErrorToClient
 
-func processMessage(websocketConnection *gorillaWebSocket.Conn, authenticatedIdentityPublicKeyHexClient string) error {
+func processMessage(websocketConnection *gorillaWebSocket.Conn) error {
 	// Initialize an empty variable to hold the protobuf message
 	var messageFromClientProtobuf backendProtobuf.BackendMessage
 	// Read a message from a client over the websocket connection
