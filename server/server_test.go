@@ -27,12 +27,12 @@ type Client struct {
 	KeyManager          panthalassaKeyManager.KeyManager
 	SignedPreKey        bitnationX3dh.KeyPair
 	OneTimePreKeys      []bitnationX3dh.KeyPair
-	WebsocketConnection *gorillaWebSocket.Conn
+	WebSocketConnection *gorillaWebSocket.Conn
 }
 
-func TestHandleWebsocketConnection(t *testing.T) {
+func TestHandleWebSocketConnection(t *testing.T) {
 	// Start the websocket server
-	go StartWebsocketServer()
+	go StartWebSocketServer()
 	// Create a new static SignedPreKey to make testing easier
 	signedPreKeyReceiver := newStaticSignedPreKeyReceiver()
 	// Create a new static OneTimePreKey to make testing easier
@@ -74,11 +74,11 @@ func TestHandleWebsocketConnection(t *testing.T) {
 	// Initial message sender sends a message to the backend to get persisted
 	clientSender.testSendMessage(t, remotePreKeyBundlePublic)
 	// We assume Receiver is offline
-	clientReceiver.WebsocketConnection.Close()
+	clientReceiver.WebSocketConnection.Close()
 	// Receiver reconnects
-	reconnectedWebsocketConnection := newWebsocketConnection(t, "ws://localhost:8080/chat", "5d41402abc4b2a76b9719d911017c592")
+	reconnectedWebSocketConnection := newWebSocketConnection(t, "ws://localhost:8080/chat", "5d41402abc4b2a76b9719d911017c592")
 	// We replace the disconnection connection with the re-established websocket connection
-	clientReceiver.WebsocketConnection = reconnectedWebsocketConnection
+	clientReceiver.WebSocketConnection = reconnectedWebSocketConnection
 	// Receiver needs to pass auth again
 	clientReceiver.testAuth(t)
 	// Receiver receives any undelivered messages while he was offline
@@ -90,7 +90,7 @@ func TestHandleWebsocketConnection(t *testing.T) {
 		// Try to decrypt them and read them
 		clientReceiver.testReadDoubleRatchetMessages(t, unreadChatMessage, expectedDecryptedMessages[index])
 	} // for index, unreadChatMessage
-} // func TestHandleWebsocketConnection
+} // func TestHandleWebSocketConnection
 
 func newStaticSignedPreKeyReceiver() bitnationX3dh.KeyPair {
 	// Static SignedPreKey to make it easier for testing
@@ -108,7 +108,7 @@ func newStaticOneTimePreKeysReceiver() []bitnationX3dh.KeyPair {
 	return []bitnationX3dh.KeyPair{oneTimePreKeyReceiver}
 }
 
-func newWebsocketConnection(t *testing.T, websocketURL, bearer string) *gorillaWebSocket.Conn {
+func newWebSocketConnection(t *testing.T, websocketURL, bearer string) *gorillaWebSocket.Conn {
 	// Setup custom headers to allow the Bearer token
 	customHeaders := http.Header{}
 	// Add the Bearer token to the custom headers
@@ -122,7 +122,7 @@ func newWebsocketConnection(t *testing.T, websocketURL, bearer string) *gorillaW
 }
 func newClient(t *testing.T, name, location, image, mnemonicString, websocketURL, bearer string, oneTimePreKeys []bitnationX3dh.KeyPair, signedPreKey bitnationX3dh.KeyPair) Client {
 	// Establish a new websocket connection
-	websocketConnection := newWebsocketConnection(t, websocketURL, bearer)
+	websocketConnection := newWebSocketConnection(t, websocketURL, bearer)
 	// Use the mnemonic string supplied
 	mnemonic, mnemonicErr := panthalassaMnemonic.FromString(mnemonicString)
 	testifyRequire.Nil(t, mnemonicErr)
@@ -146,8 +146,8 @@ func newClient(t *testing.T, name, location, image, mnemonicString, websocketURL
 	client.OneTimePreKeys = oneTimePreKeys
 	// Set the SignedPreKey
 	client.SignedPreKey = signedPreKey
-	// Set the WebsocketCOnnection
-	client.WebsocketConnection = websocketConnection
+	// Set the WebSocketCOnnection
+	client.WebSocketConnection = websocketConnection
 	// Return a client object containing all of the set values
 	return client
 } // func newClient
@@ -177,11 +177,11 @@ func (c *Client) testUploadOneTimePreKeys(t *testing.T) {
 	messageToBackendProtobufBytes, messageToBackendProtobufBytesErr := golangProto.Marshal(&messageToBackendProtobuf)
 	testifyRequire.Nil(t, messageToBackendProtobufBytesErr)
 	// Send the message over the websocket connection
-	writeMessageError := c.WebsocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToBackendProtobufBytes)
+	writeMessageError := c.WebSocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToBackendProtobufBytes)
 	testifyRequire.Nil(t, writeMessageError)
 	for _, oneTimePreKey := range messageToBackendProtobuf.Response.OneTimePrekeys {
 		// Read the response from the backend
-		_, messageFromBackendProtobufBytes, readMessageErr := c.WebsocketConnection.ReadMessage()
+		_, messageFromBackendProtobufBytes, readMessageErr := c.WebSocketConnection.ReadMessage()
 		testifyRequire.Nil(t, readMessageErr)
 		// Marshal the one time pre key so that we can compare it with the backend response
 		oneTimePreKeyBytes, protoMarshalErr := golangProto.Marshal(oneTimePreKey)
@@ -213,10 +213,10 @@ func (c *Client) testUploadSignedPreKey(t *testing.T) {
 	messageToBackendProtobufBytes, messageToBackendProtobufBytesErr := golangProto.Marshal(&messageToBackendProtobuf)
 	testifyRequire.Nil(t, messageToBackendProtobufBytesErr)
 	// Send the message over the websocket connection
-	writeMessageError := c.WebsocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToBackendProtobufBytes)
+	writeMessageError := c.WebSocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToBackendProtobufBytes)
 	testifyRequire.Nil(t, writeMessageError)
 	// Read the response from the backend
-	_, messageFromBackendProtobufBytes, readMessageErr := c.WebsocketConnection.ReadMessage()
+	_, messageFromBackendProtobufBytes, readMessageErr := c.WebSocketConnection.ReadMessage()
 	testifyRequire.Nil(t, readMessageErr)
 	// Marhsal the signedPreKey so that we can compare it with the backend response
 	signedPreKeyBytes, protoMarshalErr := golangProto.Marshal(&preKeyProtobuf)
@@ -298,7 +298,7 @@ func (c *Client) testSendMessage(t *testing.T, receiverPreKeyBundlePublic PreKey
 	messageToBackendProtoBytes, messageToBackendProtoBytesErr := golangProto.Marshal(&messageToBackendProto)
 	testifyRequire.Nil(t, messageToBackendProtoBytesErr)
 	// Send our protobuf ChatMessage structure via our websocket connection
-	writeMessageError := c.WebsocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToBackendProtoBytes)
+	writeMessageError := c.WebSocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToBackendProtoBytes)
 	testifyRequire.Nil(t, writeMessageError)
 	// For each message that we are sending to the backend
 	for _, singleMessageToBackendProtobuf := range messageToBackendProto.Request.Messages {
@@ -306,7 +306,7 @@ func (c *Client) testSendMessage(t *testing.T, receiverPreKeyBundlePublic PreKey
 		messageToBackendProtobufBytes, singleMessageToBackendProtobufBytesErr := golangProto.Marshal(singleMessageToBackendProtobuf)
 		testifyRequire.Nil(t, singleMessageToBackendProtobufBytesErr)
 		// Read the response from the backend
-		_, messageFromBackendProtobufBytes, readMessageErr := c.WebsocketConnection.ReadMessage()
+		_, messageFromBackendProtobufBytes, readMessageErr := c.WebSocketConnection.ReadMessage()
 		testifyRequire.Nil(t, readMessageErr)
 		// Make sure the backend echoes back the messages we sent to confirm that the messages was persisted
 		testifyRequire.Equal(t, messageFromBackendProtobufBytes, messageToBackendProtobufBytes)
@@ -324,10 +324,10 @@ func (c *Client) testRequestPreKeyBundle(t *testing.T, preKeyBundleIdentifier []
 	messageToBackendProtoBytes, messageToBackendProtoErr := golangProto.Marshal(&messageToBackendProto)
 	testifyRequire.Nil(t, messageToBackendProtoErr)
 	// Send our pre key bundle request to the backend
-	writeMessageErr := c.WebsocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToBackendProtoBytes)
+	writeMessageErr := c.WebSocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToBackendProtoBytes)
 	testifyRequire.Nil(t, writeMessageErr)
 	// Read the response from the backend
-	_, messageFromBackend, readMessageErr := c.WebsocketConnection.ReadMessage()
+	_, messageFromBackend, readMessageErr := c.WebSocketConnection.ReadMessage()
 	testifyRequire.Nil(t, readMessageErr)
 	// Create a structure that would hold the unmarshaled protobuf response from the backend
 	var messageFromBackendProtobuf backendProtobuf.BackendMessage
@@ -448,7 +448,7 @@ func (c *Client) testReadDoubleRatchetMessages(t *testing.T, unreadChatMessage *
 
 func (c *Client) receiveUndeliveredMessages(t *testing.T) []*backendProtobuf.ChatMessage {
 	// Read the message from backend
-	_, undeliveredMessages, readMessageErr := c.WebsocketConnection.ReadMessage()
+	_, undeliveredMessages, readMessageErr := c.WebSocketConnection.ReadMessage()
 	testifyRequire.Nil(t, readMessageErr)
 	// Create an empty BackendMessage structure
 	messageFromBackendProto := backendProtobuf.BackendMessage{}
@@ -471,7 +471,7 @@ func (c *Client) testAuth(t *testing.T) {
 	// Set the type of request we are replying to
 	messageToBackend.RequestID = "@TODO"
 	// Read the data from the server which should contain the byte sequence we need to sign
-	_, messageFromBackendBytes, readMessageErr := c.WebsocketConnection.ReadMessage()
+	_, messageFromBackendBytes, readMessageErr := c.WebSocketConnection.ReadMessage()
 	testifyRequire.Nil(t, readMessageErr)
 	// Unmarshal the data from the server into our Message structure
 	protoUnmarshalErr := golangProto.Unmarshal(messageFromBackendBytes, &messageFromBackend)
@@ -512,10 +512,10 @@ func (c *Client) testAuth(t *testing.T) {
 	messageToBackendBytes, protobufAuthBytesErr := golangProto.Marshal(&messageToBackend)
 	testifyRequire.Nil(t, protobufAuthBytesErr)
 	// Send our protobuf Auth structure via our websocket connection
-	writeMessageErr := c.WebsocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToBackendBytes)
+	writeMessageErr := c.WebSocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToBackendBytes)
 	testifyRequire.Nil(t, writeMessageErr)
 	// Read back the response from the backend
-	_, messageFromBackendBytes, readMessageErr = c.WebsocketConnection.ReadMessage()
+	_, messageFromBackendBytes, readMessageErr = c.WebSocketConnection.ReadMessage()
 	testifyRequire.Nil(t, readMessageErr)
 	// Make sure the backend echoes back the authentication attempt as a means to confirm that it's successful
 	testifyRequire.Equal(t, messageToBackendBytes, messageFromBackendBytes)

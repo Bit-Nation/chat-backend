@@ -23,13 +23,13 @@ var multiUserProfileStore = make(map[string][]byte)
 var multiUserSignedPreKeyStore = make(map[string][]byte)
 var multiUserOneTimePreKeys = make(map[string][][]byte)
 
-// StartWebsocketServer starts the websocket server
-func StartWebsocketServer() {
+// StartWebSocketServer starts the websocket server
+func StartWebSocketServer() {
 	multiUserProfileStore["22cfd1af5798544287cbf7721a0a4ebc2506d6f4df05413355a7f5cc86740724"] = []byte{10, 3, 66, 111, 98, 18, 5, 69, 97, 114, 116, 104, 26, 6, 98, 97, 115, 101, 54, 52, 34, 32, 34, 207, 209, 175, 87, 152, 84, 66, 135, 203, 247, 114, 26, 10, 78, 188, 37, 6, 214, 244, 223, 5, 65, 51, 85, 167, 245, 204, 134, 116, 7, 36, 42, 33, 2, 112, 86, 251, 69, 250, 221, 106, 218, 195, 167, 212, 229, 95, 13, 127, 156, 213, 63, 112, 93, 97, 163, 22, 140, 10, 129, 15, 99, 86, 187, 115, 196, 50, 32, 126, 223, 126, 93, 92, 179, 254, 62, 209, 108, 209, 75, 184, 251, 115, 230, 54, 254, 106, 11, 82, 61, 34, 47, 24, 11, 41, 186, 154, 145, 202, 97, 56, 180, 218, 177, 218, 5, 64, 2, 74, 64, 60, 237, 190, 135, 89, 152, 249, 49, 184, 64, 107, 107, 84, 70, 94, 195, 44, 202, 42, 211, 33, 168, 210, 185, 163, 120, 172, 234, 13, 50, 67, 143, 7, 255, 62, 69, 113, 89, 41, 83, 161, 146, 57, 13, 78, 196, 150, 249, 101, 59, 117, 129, 49, 137, 172, 66, 241, 104, 187, 41, 83, 129, 231, 3, 82, 65, 172, 68, 236, 179, 119, 160, 208, 100, 212, 101, 36, 155, 38, 5, 104, 222, 95, 90, 182, 38, 76, 55, 189, 139, 61, 253, 129, 97, 250, 254, 0, 139, 86, 225, 112, 3, 88, 56, 70, 147, 39, 54, 136, 131, 210, 183, 72, 11, 239, 64, 47, 168, 20, 11, 197, 204, 64, 166, 110, 184, 163, 152, 253, 7, 1}
 	// Create new gorillaRouter
 	gorillaRouter := gorillaMux.NewRouter()
-	// Bind an endpoint path to handleWebsocketConnection
-	gorillaRouter.HandleFunc("/chat", HandleWebsocketConnection)
+	// Bind an endpoint path to handleWebSocketConnection
+	gorillaRouter.HandleFunc("/chat", HandleWebSocketConnection)
 	// Listen on a specific port for incoming connections
 	listenAndServeErr := http.ListenAndServe(":8080", gorillaRouter)
 	// If there is an error while setting up
@@ -37,10 +37,10 @@ func StartWebsocketServer() {
 		// Panic and show us the error
 		log.Fatal("ListenAndServe: " + listenAndServeErr.Error())
 	} // if listenAndServeErr != nil {
-} // func startWebsocketServer
+} // func startWebSocketServer
 
-// HandleWebsocketConnection decides what happens when a client establishes a websocket connection to the server
-func HandleWebsocketConnection(serverHTTPResponse http.ResponseWriter, clientHTTPRequest *http.Request) {
+// HandleWebSocketConnection decides what happens when a client establishes a websocket connection to the server
+func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTTPRequest *http.Request) {
 	// Allow only requests which contain the specific Bearer header
 	// Allow only GET requests
 	if clientHTTPRequest.Header.Get("Bearer") != "5d41402abc4b2a76b9719d911017c592" || clientHTTPRequest.Method != "GET" {
@@ -83,7 +83,7 @@ func HandleWebsocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 	websocketConnection.Close()
 	return
 	// Read first message from client
-} // func handleWebsocketConnection
+} // func handleWebSocketConnection
 
 func processMessage(websocketConnection *gorillaWebSocket.Conn, authenticatedIdentityPublicKeyHexClient string) error {
 	// Initialize an empty variable to hold the protobuf message
