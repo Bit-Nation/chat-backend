@@ -73,8 +73,6 @@ func TestHandleWebSocketConnection(t *testing.T) {
 	remotePreKeyBundlePublic := clientSender.testRequestPreKeyBundle(t, []byte("22cfd1af5798544287cbf7721a0a4ebc2506d6f4df05413355a7f5cc86740724"))
 	// Initial message sender sends a message to the backend to get persisted
 	clientSender.testSendMessage(t, remotePreKeyBundlePublic)
-	// We assume Receiver is offline
-	clientReceiver.WebSocketConnection.Close()
 	// Receiver reconnects
 	reconnectedWebSocketConnection := newWebSocketConnection(t, "ws://localhost:8080/chat", "5d41402abc4b2a76b9719d911017c592")
 	// We replace the disconnection connection with the re-established websocket connection

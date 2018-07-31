@@ -65,25 +65,12 @@ func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 	if websocketConnectionRequestAuthErr != nil {
 		// Log a failed authentication attempt
 		log.Println("Authentication Failed:", websocketConnectionRequestAuthErr)
-		// Create a protobuf message structure to send back to the client
-		var messageToClientProtobuf backendProtobuf.BackendMessage
-		// Create a []byte variable to hold the marshaled protobuf bytes
-		var messageToClientProtobufBytes []byte
-		// Create an error variable to hold an error in case the protobuf marshaling failed
-		var messageToClientProtobufBytesErr error
-		// Set the authentication error in the message structure so it can be sent back to the client
-		messageToClientProtobuf.Error = websocketConnectionRequestAuthErr.Error()
-		// If there is an error while marshaling the message structure
-		if messageToClientProtobufBytes, messageToClientProtobufBytesErr = golangProto.Marshal(&messageToClientProtobuf); messageToClientProtobufBytesErr != nil {
-			// Log the protobuf message error
-			log.Println("Error while marshaling the message to client:", messageToClientProtobufBytesErr)
-		} // if messageToClientProtobufBytes
-		// Still send the message to client even in case there was a protobuf marshal error.
-		// The client would receive an empty []byte and should handle it as an invalid response
+		// In case there was a protobuf marshal error, The client would receive an empty []byte and should handle it as an invalid response
 		// Even with an invalid response, the client should still take the hint that his authentication attempt has failed
-		if writeMessageErr := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientProtobufBytes); writeMessageErr != nil {
-			log.Println("Terminating websocket connection to client.")
+		if writeMessageErr := sendErrorToClient(websocketConnectionRequestAuthErr, websocketConnection); writeMessageErr != nil {
+			log.Println("Error while sending an error to the client:", writeMessageErr)
 		} // if writeMessageErr
+		log.Println("Terminating websocket connection to client.")
 		// Close the websocket connection
 		websocketConnection.Close()
 		return
@@ -94,15 +81,49 @@ func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 		deliverMessages(websocketConnection, messagesToBeDelivered)
 	} // if messagesToBeDelivered
 
+	// Try to process a message from the client
 	websocketConnectionProcessMessageErr := processMessage(websocketConnection, authenticatedIdentityPublicKeyHexClient)
+	// For as long as we don't enounter an error while processing messages from the client
 	for websocketConnectionProcessMessageErr == nil {
+		// Process messages from the client
 		websocketConnectionProcessMessageErr = processMessage(websocketConnection, authenticatedIdentityPublicKeyHexClient)
-	}
+	} // for websocketConnectionProcessMessageErr == nil
+	// Once we enounter an error while processing messages from the client
+	// Log the error we encountered
+	log.Println("Error while processing message from the client", websocketConnectionProcessMessageErr)
+	// If there is an error while sending the error to the client
+	if writeMessageErr := sendErrorToClient(websocketConnectionProcessMessageErr, websocketConnection); writeMessageErr != nil {
+		// Log the error we encountered
+		log.Println("Error while sending an error to the client:", writeMessageErr)
+	} // if writeMessageErr
+	log.Println("Terminating websocket connection to client.")
 	// Close the websocket connection
 	websocketConnection.Close()
 	return
 	// Read first message from client
 } // func handleWebSocketConnection
+
+func sendErrorToClient(encounteredError error, websocketConnection *gorillaWebSocket.Conn) error {
+	// Create a protobuf message structure to send back to the client
+	var messageToClientProtobuf backendProtobuf.BackendMessage
+	// Create a []byte variable to hold the marshaled protobuf bytes
+	var messageToClientProtobufBytes []byte
+	// Create an error variable to hold an error in case the protobuf marshaling failed
+	var messageToClientProtobufBytesErr error
+	// Set the authentication error in the message structure so it can be sent back to the client
+	messageToClientProtobuf.Error = encounteredError.Error()
+	// If there is an error while marshaling the message structure
+	if messageToClientProtobufBytes, messageToClientProtobufBytesErr = golangProto.Marshal(&messageToClientProtobuf); messageToClientProtobufBytesErr != nil {
+		// Log the protobuf message error and continue with the rest of the function
+		log.Println("Error while marshaling the message to client:", messageToClientProtobufBytesErr)
+	} // if messageToClientProtobufBytes
+	// Returned the marshaled message bytes
+	if writeMessageErr := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientProtobufBytes); writeMessageErr != nil {
+		return writeMessageErr
+	} // if writeMessageErr
+	// Return nil when no error was encountered
+	return nil
+} // func sendErrorToClient
 
 func processMessage(websocketConnection *gorillaWebSocket.Conn, authenticatedIdentityPublicKeyHexClient string) error {
 	// Initialize an empty variable to hold the protobuf message
