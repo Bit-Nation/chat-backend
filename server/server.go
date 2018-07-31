@@ -60,11 +60,11 @@ func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 		return
 	}
 	// Require successful authentication before allowing a client to send a message
-	authenticatedIdentityPublicKeyHexClient, websocketConnectionrequestAuthErr := requestAuth(websocketConnection)
-	if websocketConnectionrequestAuthErr != nil {
+	authenticatedIdentityPublicKeyHexClient, websocketConnectionRequestAuthErr := requestAuth(websocketConnection)
+	if websocketConnectionRequestAuthErr != nil {
 		// If the authentication failed, terminate the websocket connection to the client
-		log.Println("Authentication Failed:", websocketConnectionrequestAuthErr)
-		websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, []byte(websocketConnectionrequestAuthErr.Error()))
+		log.Println("Authentication Failed:", websocketConnectionRequestAuthErr)
+		websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, []byte(websocketConnectionRequestAuthErr.Error()))
 		log.Println("Terminating websocket connection to client.")
 		// Close the websocket connection
 		websocketConnection.Close()
