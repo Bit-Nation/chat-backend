@@ -251,7 +251,9 @@ func (c *Client) testSendMessage(t *testing.T, receiverPreKeyBundlePublic PreKey
 	// Use the calculated shared secret which is a result from consuming the message Receiver's prekey bundle
 	sharedSecretSender := initializedX3DHProtocolSender.SharedSecret
 	// Initialize a new double Ratchet session for Sender which would allow her to encrypt a message
-	doubleRatchetSessionSender, doubleRatchetSessionErr := tiabcDoubleratchet.New(sharedSecretSender, doubleratchetKeyPair{keyPair: chatIDKeyPairSender}, tiabcDoubleratchet.WithKeysStorage(&tiabcDoubleratchet.KeysStorageInMemory{}))
+	var drSharedSec tiabcDoubleratchet.Key
+	copy(drSharedSec[:], sharedSecretSender[:])
+	doubleRatchetSessionSender, doubleRatchetSessionErr := tiabcDoubleratchet.New(drSharedSec, doubleratchetKeyPair{keyPair: chatIDKeyPairSender}, tiabcDoubleratchet.WithKeysStorage(&tiabcDoubleratchet.KeysStorageInMemory{}))
 	testifyRequire.Nil(t, doubleRatchetSessionErr)
 	// Encrypt a message from the message Sender
 	doubleRatchetMsgSender := doubleRatchetSessionSender.RatchetEncrypt([]byte("SECRETMESSAGENEW1"), []byte{})
@@ -421,6 +423,8 @@ func (c *Client) testReadDoubleRatchetMessages(t *testing.T, unreadChatMessage *
 	// Create a remoteChatIDKeyBytes variable to conform to the [32]byte type requirement and set it to the value of remoteChatIDKey
 	var remoteChatIDKeyBytes [32]byte = remoteChatIDKey
 	// Initiate a new double retchet session using the derived shared secret and the remoteChatIDKey
+	var drSharedSec tiabcDoubleratchet.Key
+	copy(drSharedSec[:], sharedSecretReceiver[:])
 	doubleRatchetSessionReceiver, doubleRatchetSessionErr := tiabcDoubleratchet.NewWithRemoteKey(sharedSecretReceiver, remoteChatIDKeyBytes, tiabcDoubleratchet.WithKeysStorage(&tiabcDoubleratchet.KeysStorageInMemory{}))
 	testifyRequire.Nil(t, doubleRatchetSessionErr)
 	// Create a doubleRatchetKey variable to conform to the tiabcDoubleratchet.Key type requirement
@@ -574,14 +578,14 @@ func (b *PreKeyBundlePublic) OneTimePreKey() *bitnationX3dh.PublicKey {
 	return &b.BundleOneTimePreKey
 }
 
-func (b *PreKeyBundlePublic) ValidSignature() bool {
+func (b *PreKeyBundlePublic) ValidSignature() (bool, error) {
 	// @TODO REMOVE RETURN TRUE AND CALCULATE SIGNATURE IN ANOTHER WAY
-	return true
+	return true, nil
 	rawIDKey, err := hex.DecodeString(b.BundleIdentityKey)
 	if err != nil {
-		return false
+		return false, nil
 	}
-	return cryptoEd25519.Verify(rawIDKey[:], b.hashBundle(), b.BundleSignature[:])
+	return cryptoEd25519.Verify(rawIDKey[:], b.hashBundle(), b.BundleSignature[:]), nil
 }
 
 // sign profile with given private key
