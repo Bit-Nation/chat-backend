@@ -421,6 +421,9 @@ func requestAuth(websocketConnection *gorillaWebSocket.Conn) (string, error) {
 	}
 	// Get the byte sequence which was signed by the client
 	byteSequenceThatClientSigned := messageFromClient.Response.Auth.ToSign
+	if len(byteSequenceThatClientSigned) != 8 {
+		return "", errors.New("Signed byte sequence should be exactly 8 bytes")
+	} // if len(byteSequenceThatClientSigned) != 8
 	// Check if the byte sequence that was signed by the client contains the initial bytes we sent to the client
 	if !bytes.HasPrefix(byteSequenceThatClientSigned, backendRandomBytes) {
 		// If the client has modified the bytes we sent, return an error pointing out that this behavior is not allowed
