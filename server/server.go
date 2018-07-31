@@ -61,15 +61,34 @@ func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 	}
 	// Require successful authentication before allowing a client to send a message
 	authenticatedIdentityPublicKeyHexClient, websocketConnectionRequestAuthErr := requestAuth(websocketConnection)
+	// If the authentication failed,
 	if websocketConnectionRequestAuthErr != nil {
-		// If the authentication failed, terminate the websocket connection to the client
+		// Log a failed authentication attempt
 		log.Println("Authentication Failed:", websocketConnectionRequestAuthErr)
-		websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, []byte(websocketConnectionRequestAuthErr.Error()))
-		log.Println("Terminating websocket connection to client.")
+		// Create a protobuf message structure to send back to the client
+		var messageToClientProtobuf backendProtobuf.BackendMessage
+		// Create a []byte variable to hold the marshaled protobuf bytes
+		var messageToClientProtobufBytes []byte
+		// Create an error variable to hold an error in case the protobuf marshaling failed
+		var messageToClientProtobufBytesErr error
+		// Set the authentication error in the message structure so it can be sent back to the client
+		messageToClientProtobuf.Error = websocketConnectionRequestAuthErr.Error()
+		// If there is an error while marshaling the message structure
+		if messageToClientProtobufBytes, messageToClientProtobufBytesErr = golangProto.Marshal(&messageToClientProtobuf); messageToClientProtobufBytesErr != nil {
+			// Log the protobuf message error
+			log.Println("Error while marshaling the message to client:", messageToClientProtobufBytesErr)
+		} // if messageToClientProtobufBytes
+		// Still send the message to client even in case there was a protobuf marshal error.
+		// The client would receive an empty []byte and should handle it as an invalid response
+		// Even with an invalid response, the client should still take the hint that his authentication attempt has failed
+		if writeMessageErr := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientProtobufBytes); writeMessageErr != nil {
+			log.Println("Terminating websocket connection to client.")
+		} // if writeMessageErr
 		// Close the websocket connection
 		websocketConnection.Close()
 		return
-	}
+	} // if websocketConnectionRequestAuthErr != nil
+
 	// Check if there are pending messages to be delivered when the client comes back online
 	if messagesToBeDelivered, ok := multiUserChatMessage[authenticatedIdentityPublicKeyHexClient]; ok {
 		deliverMessages(websocketConnection, messagesToBeDelivered)
