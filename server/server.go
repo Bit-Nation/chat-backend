@@ -429,8 +429,16 @@ func requestAuth(websocketConnection *gorillaWebSocket.Conn) (string, error) {
 		// If the client has modified the bytes we sent, return an error pointing out that this behavior is not allowed
 		return "", errors.New("Client is only allowed to append a byte sequence, and not to modify the one which was sent")
 	}
+	// Make sure that the identityPublicKey is exactly 32 bytes
+	if len(identityPublicKey) != 32 {
+		return "", errors.New("identityPublicKey should be exactly 32 bytes")
+	} // if len(identityPublicKey) != 32
 	// Fill the newly created identityPublicKey with the hex decoded representation of the IdentityPublicKey contained in the response from the client
 	copy(identityPublicKey[:], identityPublicKeyDecoded)
+	// Make sure that the Signature is exactly 64 bytes
+	if len(messageFromClient.Response.Auth.Signature) != 64 {
+		return "", errors.New("Signature should be exactly 64 bytes")
+	} // if len(messageFromClient.Response.Auth.Signature) != 32
 	// Fill the newly created byteSequenceToSignSignature with the Signature contained in the response from the client
 	copy(byteSequenceToSignSignature[:], messageFromClient.Response.Auth.Signature)
 	// Verify the validity of the signature using cryptoEd25519.Verify()
