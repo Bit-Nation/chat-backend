@@ -10,10 +10,10 @@ import (
 	"net/http"
 
 	backendProtobuf "github.com/Bit-Nation/protobuffers"
-	"github.com/golang/protobuf/proto"
-	"github.com/gorilla/mux"
-	"github.com/gorilla/websocket"
-	"golang.org/x/crypto/ed25519"
+	golangProto "github.com/golang/protobuf/proto"
+	gorillaMux "github.com/gorilla/mux"
+	gorillaWebSocket "github.com/gorilla/websocket"
+	cryptoEd25519 "golang.org/x/crypto/ed25519"
 )
 
 // @TODO REPLACE WITH GOOGLE DATASTORE
@@ -27,7 +27,7 @@ var multiUserOneTimePreKeys = make(map[string][][]byte)
 func StartWebsocketServer() {
 	multiUserProfileStore["22cfd1af5798544287cbf7721a0a4ebc2506d6f4df05413355a7f5cc86740724"] = []byte{10, 3, 66, 111, 98, 18, 5, 69, 97, 114, 116, 104, 26, 6, 98, 97, 115, 101, 54, 52, 34, 32, 34, 207, 209, 175, 87, 152, 84, 66, 135, 203, 247, 114, 26, 10, 78, 188, 37, 6, 214, 244, 223, 5, 65, 51, 85, 167, 245, 204, 134, 116, 7, 36, 42, 33, 2, 112, 86, 251, 69, 250, 221, 106, 218, 195, 167, 212, 229, 95, 13, 127, 156, 213, 63, 112, 93, 97, 163, 22, 140, 10, 129, 15, 99, 86, 187, 115, 196, 50, 32, 126, 223, 126, 93, 92, 179, 254, 62, 209, 108, 209, 75, 184, 251, 115, 230, 54, 254, 106, 11, 82, 61, 34, 47, 24, 11, 41, 186, 154, 145, 202, 97, 56, 180, 218, 177, 218, 5, 64, 2, 74, 64, 60, 237, 190, 135, 89, 152, 249, 49, 184, 64, 107, 107, 84, 70, 94, 195, 44, 202, 42, 211, 33, 168, 210, 185, 163, 120, 172, 234, 13, 50, 67, 143, 7, 255, 62, 69, 113, 89, 41, 83, 161, 146, 57, 13, 78, 196, 150, 249, 101, 59, 117, 129, 49, 137, 172, 66, 241, 104, 187, 41, 83, 129, 231, 3, 82, 65, 172, 68, 236, 179, 119, 160, 208, 100, 212, 101, 36, 155, 38, 5, 104, 222, 95, 90, 182, 38, 76, 55, 189, 139, 61, 253, 129, 97, 250, 254, 0, 139, 86, 225, 112, 3, 88, 56, 70, 147, 39, 54, 136, 131, 210, 183, 72, 11, 239, 64, 47, 168, 20, 11, 197, 204, 64, 166, 110, 184, 163, 152, 253, 7, 1}
 	// Create new gorillaRouter
-	gorillaRouter := mux.NewRouter()
+	gorillaRouter := gorillaMux.NewRouter()
 	// Bind an endpoint path to handleWebsocketConnection
 	gorillaRouter.HandleFunc("/chat", HandleWebsocketConnection)
 	// Listen on a specific port for incoming connections
@@ -49,7 +49,7 @@ func HandleWebsocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 		return
 	}
 	// Prepare to upgrade the HTTP connection to a WebSocket connection
-	httpConnectionUpgrader := websocket.Upgrader{}
+	httpConnectionUpgrader := gorillaWebSocket.Upgrader{}
 	// Upgrade the HTTP connection to a WebSocket connection
 	websocketConnection, websocketConnectionErr := httpConnectionUpgrader.Upgrade(serverHTTPResponse, clientHTTPRequest, nil)
 	if websocketConnectionErr != nil {
@@ -64,7 +64,7 @@ func HandleWebsocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 	if websocketConnectionrequestAuthErr != nil {
 		// If the authentication failed, terminate the websocket connection to the client
 		log.Println("Authentication Failed:", websocketConnectionrequestAuthErr)
-		websocketConnection.WriteMessage(websocket.BinaryMessage, []byte(websocketConnectionrequestAuthErr.Error()))
+		websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, []byte(websocketConnectionrequestAuthErr.Error()))
 		log.Println("Terminating websocket connection to client.")
 		// Close the websocket connection
 		websocketConnection.Close()
@@ -85,7 +85,7 @@ func HandleWebsocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 	// Read first message from client
 } // func handleWebsocketConnection
 
-func processMessage(websocketConnection *websocket.Conn, authenticatedIdentityPublicKeyHexClient string) error {
+func processMessage(websocketConnection *gorillaWebSocket.Conn, authenticatedIdentityPublicKeyHexClient string) error {
 	// Initialize an empty variable to hold the protobuf message
 	var messageFromClientProtobuf backendProtobuf.BackendMessage
 	// Read a message from a client over the websocket connection
@@ -95,7 +95,7 @@ func processMessage(websocketConnection *websocket.Conn, authenticatedIdentityPu
 		return readMessageErr
 	}
 	// Unmarshal the protobuf bytes from the message we received into our protobuf message structure
-	protoUnmarshalErr := proto.Unmarshal(messageFromClientBytes, &messageFromClientProtobuf)
+	protoUnmarshalErr := golangProto.Unmarshal(messageFromClientBytes, &messageFromClientProtobuf)
 	if protoUnmarshalErr != nil {
 		// If there is an error while unmarshaling the response from the client, return the error
 		return protoUnmarshalErr
@@ -153,13 +153,13 @@ func processMessage(websocketConnection *websocket.Conn, authenticatedIdentityPu
 	return nil
 } // func processMessage
 
-func persistOneTimeKeysFromClient(websocketConnection *websocket.Conn, oneTimePreKeysFromClient []*backendProtobuf.PreKey) error {
+func persistOneTimeKeysFromClient(websocketConnection *gorillaWebSocket.Conn, oneTimePreKeysFromClient []*backendProtobuf.PreKey) error {
 	// For each one time pre key received from client
 	for _, oneTimePreKeyFromClient := range oneTimePreKeysFromClient {
 		// Create a hex representation of the IdentityKey of the client
 		clientIdentityKeyHex := hex.EncodeToString(oneTimePreKeyFromClient.IdentityKey)
 		// Use protobuf to marshal the one time pre key into bytes so that we can store it easily
-		oneTimePreKeyFromClientProtobufBytes, protoMarshalErr := proto.Marshal(oneTimePreKeyFromClient)
+		oneTimePreKeyFromClientProtobufBytes, protoMarshalErr := golangProto.Marshal(oneTimePreKeyFromClient)
 		// If there is an error while marshalling the one time pre key from the client
 		if protoMarshalErr != nil {
 			// Return the error
@@ -168,7 +168,7 @@ func persistOneTimeKeysFromClient(websocketConnection *websocket.Conn, oneTimePr
 		// Store the one time pre key from the client
 		multiUserOneTimePreKeys[clientIdentityKeyHex] = append(multiUserOneTimePreKeys[clientIdentityKeyHex], oneTimePreKeyFromClientProtobufBytes)
 		// Signal to the client that the one time pre key has been persisted
-		writeMessageError := websocketConnection.WriteMessage(websocket.BinaryMessage, oneTimePreKeyFromClientProtobufBytes)
+		writeMessageError := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, oneTimePreKeyFromClientProtobufBytes)
 		// If there is an error while sending a message to a client
 		if writeMessageError != nil {
 			return writeMessageError
@@ -177,11 +177,11 @@ func persistOneTimeKeysFromClient(websocketConnection *websocket.Conn, oneTimePr
 	return nil
 }
 
-func persistSignedPreKeyFromClient(websocketConnection *websocket.Conn, signedPreKeyFromClient *backendProtobuf.PreKey) error {
+func persistSignedPreKeyFromClient(websocketConnection *gorillaWebSocket.Conn, signedPreKeyFromClient *backendProtobuf.PreKey) error {
 	// Create a hex representation of the IdentityKey of the client
 	clientIdentityKeyHex := hex.EncodeToString(signedPreKeyFromClient.IdentityKey)
 	// Use protobuf to marshal the signed pre key into bytes so that we can store it easily
-	signedPreKeyFromClientProtobufBytes, protoMarshalErr := proto.Marshal(signedPreKeyFromClient)
+	signedPreKeyFromClientProtobufBytes, protoMarshalErr := golangProto.Marshal(signedPreKeyFromClient)
 	// If there is an error while marshalling the signed pre key from the client
 	if protoMarshalErr != nil {
 		// Return the error
@@ -190,7 +190,7 @@ func persistSignedPreKeyFromClient(websocketConnection *websocket.Conn, signedPr
 	// Store the SignedPreKey from the client
 	multiUserSignedPreKeyStore[clientIdentityKeyHex] = signedPreKeyFromClientProtobufBytes
 	// Signal to the client that the SignedPreyKey has been persisted
-	writeMessageError := websocketConnection.WriteMessage(websocket.BinaryMessage, signedPreKeyFromClientProtobufBytes)
+	writeMessageError := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, signedPreKeyFromClientProtobufBytes)
 	// If there is an error while sending a message to a client
 	if writeMessageError != nil {
 		return writeMessageError
@@ -199,11 +199,11 @@ func persistSignedPreKeyFromClient(websocketConnection *websocket.Conn, signedPr
 	return nil
 }
 
-func handleMessageFromClient(websocketConnection *websocket.Conn, messagesFromClient []*backendProtobuf.ChatMessage) error {
+func handleMessageFromClient(websocketConnection *gorillaWebSocket.Conn, messagesFromClient []*backendProtobuf.ChatMessage) error {
 	// For each message received from client
 	for _, singleMessageFromClient := range messagesFromClient {
 		// Use protobuf to marshal the message into bytes so that we can store it easily
-		chatMessageProtobufBytes, chatMessageProtobufError := proto.Marshal(singleMessageFromClient)
+		chatMessageProtobufBytes, chatMessageProtobufError := golangProto.Marshal(singleMessageFromClient)
 		// If there is an error while marshaling the individual message from the client
 		if chatMessageProtobufError != nil {
 			// Return the error
@@ -214,7 +214,7 @@ func handleMessageFromClient(websocketConnection *websocket.Conn, messagesFromCl
 		// Use the string representation of the identityPublicKey as part of our backend storage
 		multiUserChatMessage[messageReceiverString] = append(multiUserChatMessage[messageReceiverString], chatMessageProtobufBytes)
 		// Echo back the same message we received from the client back to him so that we inform him that the message has been persisted
-		writeMessageError := websocketConnection.WriteMessage(websocket.BinaryMessage, chatMessageProtobufBytes)
+		writeMessageError := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, chatMessageProtobufBytes)
 		// If there is an error while sending a message to a client
 		if writeMessageError != nil {
 			return writeMessageError
@@ -223,7 +223,7 @@ func handleMessageFromClient(websocketConnection *websocket.Conn, messagesFromCl
 	return nil
 } // func handleMessageFromClient
 
-func deliverRequestedPreKeyBundle(websocketConnection *websocket.Conn, requestedPreKeyBundle []byte) {
+func deliverRequestedPreKeyBundle(websocketConnection *gorillaWebSocket.Conn, requestedPreKeyBundle []byte) {
 	// Create a string representation of the publicKey associated with the user in the preKeyBundle request
 	requestedPreKeyBundleString := string(requestedPreKeyBundle)
 	// Initialize an empty variable to hold the marshaled protobuf bytes of our response to the client
@@ -245,7 +245,7 @@ func deliverRequestedPreKeyBundle(websocketConnection *websocket.Conn, requested
 	// If a Profile which matches the client request exists in our backend storage
 	if singleUserProfile, ok := multiUserProfileStore[requestedPreKeyBundleString]; ok {
 		// Unmarshal it into our PreKeyBundle structure
-		protoUnmarshalErr := proto.Unmarshal(singleUserProfile, messageToClientProtobuf.Response.PreKeyBundle.Profile)
+		protoUnmarshalErr := golangProto.Unmarshal(singleUserProfile, messageToClientProtobuf.Response.PreKeyBundle.Profile)
 		// If there is an error with the unmarshalling
 		if protoUnmarshalErr != nil {
 			// Fill in the error field in the message to client with the error that occured
@@ -256,7 +256,7 @@ func deliverRequestedPreKeyBundle(websocketConnection *websocket.Conn, requested
 	// If a SignedPreKey which matches the client request exists in our backend storage
 	if singleUserSignedPreKey, ok := multiUserSignedPreKeyStore[requestedPreKeyBundleString]; ok {
 		// Unmarshal it into our SignedPreKey structure
-		protoUnmarshalErr := proto.Unmarshal(singleUserSignedPreKey, messageToClientProtobuf.Response.PreKeyBundle.SignedPreKey)
+		protoUnmarshalErr := golangProto.Unmarshal(singleUserSignedPreKey, messageToClientProtobuf.Response.PreKeyBundle.SignedPreKey)
 		if protoUnmarshalErr != nil {
 			// Fill in the error field in the message to client with the error that occured
 			messageToClientProtobuf.Error = protoUnmarshalErr.Error()
@@ -272,7 +272,7 @@ func deliverRequestedPreKeyBundle(websocketConnection *websocket.Conn, requested
 			// Break out from the for loop after taking the first OneTimePreKey from the slice
 			break
 		} // for _, singleUserOneTimePreKey
-		protoUnmarshalErr := proto.Unmarshal(singleUserOneTimePreKey, messageToClientProtobuf.Response.PreKeyBundle.OneTimePreKey)
+		protoUnmarshalErr := golangProto.Unmarshal(singleUserOneTimePreKey, messageToClientProtobuf.Response.PreKeyBundle.OneTimePreKey)
 		if protoUnmarshalErr != nil {
 			// Fill in the error field in the message to client with the error that occured
 			messageToClientProtobuf.Error = protoUnmarshalErr.Error()
@@ -280,7 +280,7 @@ func deliverRequestedPreKeyBundle(websocketConnection *websocket.Conn, requested
 	} // if singleUserOneTimePreKeys, ok
 
 	// Use protobufs to marshal our message structure so that we can send it over the websocket connection
-	messageToClientProtobufBytes, messageToClientProtobufErr = proto.Marshal(&messageToClientProtobuf)
+	messageToClientProtobufBytes, messageToClientProtobufErr = golangProto.Marshal(&messageToClientProtobuf)
 	// If there is an error while trying to perform protobuf marshaling
 	if messageToClientProtobufErr != nil {
 		// Initialise an empty message structure with the hopes that it will marshal correctly if it's empty
@@ -288,14 +288,14 @@ func deliverRequestedPreKeyBundle(websocketConnection *websocket.Conn, requested
 		// Fill in the error field in the message to client with the error that occured
 		messageToClientProtobuf.Error = messageToClientProtobufErr.Error()
 		// Attempt to marshal the message structure again so that we can send it over the websocket connection
-		messageToClientProtobufBytes, messageToClientProtobufErr = proto.Marshal(&messageToClientProtobuf)
+		messageToClientProtobufBytes, messageToClientProtobufErr = golangProto.Marshal(&messageToClientProtobuf)
 	} // if protobufMessageToClientErr != nil {
 	// Send our message over the websocket connection
-	websocketConnection.WriteMessage(websocket.BinaryMessage, messageToClientProtobufBytes)
+	websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientProtobufBytes)
 	// @TODO HANDLE ERROR HERE?
 }
 
-func deliverMessages(websocketConnection *websocket.Conn, messagesToBeDelivered [][]byte) {
+func deliverMessages(websocketConnection *gorillaWebSocket.Conn, messagesToBeDelivered [][]byte) {
 	// Initialize an empty variable to hold the marshaled protobuf bytes
 	var messageToClientProtobufBytes []byte
 	// Initialize an empty variable to hold a protobuf error in case there is one
@@ -311,7 +311,7 @@ func deliverMessages(websocketConnection *websocket.Conn, messagesToBeDelivered 
 		// Initialize a ChatMessage protobuf to hold a single message which will be appended to the []*backendProtobuf.ChatMessage{} slice
 		singleMessageToBeDeliveredProtobuf := backendProtobuf.ChatMessage{}
 		// Unmarshal the singleMessageToBeDelivered to the singleMessageToBeDeliveredProtobuf structure
-		protoUnmarshalErr := proto.Unmarshal(singleMessageToBeDelivered, &singleMessageToBeDeliveredProtobuf)
+		protoUnmarshalErr := golangProto.Unmarshal(singleMessageToBeDelivered, &singleMessageToBeDeliveredProtobuf)
 		if protoUnmarshalErr != nil {
 			// If there is an error
 			messageToClientProtobuf.Error = protoUnmarshalErr.Error()
@@ -320,7 +320,7 @@ func deliverMessages(websocketConnection *websocket.Conn, messagesToBeDelivered 
 		messageToClientProtobuf.Request.Messages = append(messageToClientProtobuf.Request.Messages, &singleMessageToBeDeliveredProtobuf)
 	} // for _, singleMessageToBeDelivered := range messagesToBeDelivered
 	// Marshal the protobuf message structure so that it can be sent to the client over the websocket connection
-	messageToClientProtobufBytes, messageToClientProtobufErr = proto.Marshal(&messageToClientProtobuf)
+	messageToClientProtobufBytes, messageToClientProtobufErr = golangProto.Marshal(&messageToClientProtobuf)
 	// If we encounter an error while marshaling the protobuf message structure
 	if messageToClientProtobufErr != nil {
 		// Overwrite the current message structure which caused the error with an empty one in hopes that an empty one wont cause an error
@@ -328,14 +328,14 @@ func deliverMessages(websocketConnection *websocket.Conn, messagesToBeDelivered 
 		// Append the error that we encountered when trying to protobuf marshal the original message structure
 		messageToClientProtobuf.Error = messageToClientProtobufErr.Error()
 		// Attempt to marshal the protobuf message structure again which only contains the error we originally encountered so that the client knows there was an error
-		messageToClientProtobufBytes, messageToClientProtobufErr = proto.Marshal(&messageToClientProtobuf)
+		messageToClientProtobufBytes, messageToClientProtobufErr = golangProto.Marshal(&messageToClientProtobuf)
 	}
 	// Send the mashalled protobuf message structure over the websocket connection
-	websocketConnection.WriteMessage(websocket.BinaryMessage, messageToClientProtobufBytes)
+	websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientProtobufBytes)
 	// @TODO HANDLE ERROR HERE?
 } // func deliverMessages
 
-func requestAuth(websocketConnection *websocket.Conn) (string, error) {
+func requestAuth(websocketConnection *gorillaWebSocket.Conn) (string, error) {
 	// Initialize an empty Message structure
 	messageFromClient := backendProtobuf.BackendMessage{}
 	// Initialize an empty Response structure
@@ -357,13 +357,13 @@ func requestAuth(websocketConnection *websocket.Conn) (string, error) {
 	// Set the byte sequence that the client needs to sign
 	messageToClient.Request.Auth.ToSign = backendRandomBytes
 	// Prepare the data to be sent to the client
-	messageToClientBytes, messageToClientBytesErr := proto.Marshal(&messageToClient)
+	messageToClientBytes, messageToClientBytesErr := golangProto.Marshal(&messageToClient)
 	if messageToClientBytesErr != nil {
 		// If there is an error while trying to perform protobuf marshaling, terminate the connection
 		return "", messageToClientBytesErr
 	} // if messageToClientBytesErr != nil
 	// Send the protobuf data to the client containing the sequence of bytes he needs to sign
-	websocketConnection.WriteMessage(websocket.BinaryMessage, messageToClientBytes)
+	websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientBytes)
 	// Read the response from the client which should contain his IdenetityPublicKey and the signed byte sequence
 	_, messageFromClientProto, readMessageErr := websocketConnection.ReadMessage()
 	if readMessageErr != nil {
@@ -371,14 +371,14 @@ func requestAuth(websocketConnection *websocket.Conn) (string, error) {
 		return "", readMessageErr
 	}
 	// Unmarshal the response from the client into our protobuf Auth structure
-	protoUnmarshalErr := proto.Unmarshal(messageFromClientProto, &messageFromClient)
+	protoUnmarshalErr := golangProto.Unmarshal(messageFromClientProto, &messageFromClient)
 	if protoUnmarshalErr != nil {
 		// If there is an error while unmarshaling the response from the client, terminate the connection
 		return "", protoUnmarshalErr
 	}
-	// Create a [32]byte{} identityPublicKey to satisfy ed25519.Verify() type requirements
+	// Create a [32]byte{} identityPublicKey to satisfy cryptoEd25519.Verify() type requirements
 	identityPublicKey := [32]byte{}
-	// Create a [64]byte{} signedByteSequenceFromClient to satisfy ed25519.Verify() type requirements
+	// Create a [64]byte{} signedByteSequenceFromClient to satisfy cryptoEd25519.Verify() type requirements
 	signedByteSequenceFromClient := [64]byte{}
 	// Create a string representation of the Identity Public Key
 	identityPublicKeyString := string(messageFromClient.Response.Auth.IdentityPublicKey)
@@ -399,10 +399,10 @@ func requestAuth(websocketConnection *websocket.Conn) (string, error) {
 	copy(identityPublicKey[:], identityPublicKeyDecoded)
 	// Fill the newly created signedByteSequenceFromClient with the Signature contained in the response from the client
 	copy(signedByteSequenceFromClient[:], messageFromClient.Response.Auth.Signature)
-	// Verify the validity of the signature using ed25519.Verify()
-	if ed25519.Verify(identityPublicKey[:], byteSequenceThatClientSigned, signedByteSequenceFromClient[:]) {
+	// Verify the validity of the signature using cryptoEd25519.Verify()
+	if cryptoEd25519.Verify(identityPublicKey[:], byteSequenceThatClientSigned, signedByteSequenceFromClient[:]) {
 		// If the signed byte sequence from client has a valid signature, echo the authentication attempt back to the client so that he knows it was successful
-		writeMessageError := websocketConnection.WriteMessage(websocket.BinaryMessage, messageFromClientProto)
+		writeMessageError := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageFromClientProto)
 		// If there is an error while sending a message to a client
 		if writeMessageError != nil {
 			// Return the error
@@ -411,6 +411,6 @@ func requestAuth(websocketConnection *websocket.Conn) (string, error) {
 		// Return the identityPublicKey of the authenticated client
 		return identityPublicKeyString, nil
 	}
-	// If ed25519.Verify() failed to verify the signature, return a matching reponse
+	// If cryptoEd25519.Verify() failed to verify the signature, return a matching reponse
 	return "", errors.New("Invalid Signature")
 } // func requestAuth
