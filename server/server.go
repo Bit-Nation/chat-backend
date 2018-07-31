@@ -152,14 +152,14 @@ func processMessage(websocketConnection *gorillaWebSocket.Conn) error {
 		// Inner switch in case we have a Request from client, cases are valid if they are true
 		switch {
 		case messageFromClientProtobuf.Request.Messages != nil:
-			handleMessageFromClient(websocketConnection, messageFromClientProtobuf.Request.Messages)
+			return handleMessageFromClient(websocketConnection, messageFromClientProtobuf.Request.Messages)
 		// @TODO wait for @Gross input on message states
 		case messageFromClientProtobuf.Request.MessageStateChange != nil:
 			fmt.Println(messageFromClientProtobuf.Request.MessageStateChange, "MessageStateChange")
 		case messageFromClientProtobuf.Request.NewOneTimePreKeys != 0:
 			return errors.New("Only backend is allowed to request NewOneTimePreKeys")
 		case messageFromClientProtobuf.Request.PreKeyBundle != nil:
-			deliverRequestedPreKeyBundle(websocketConnection, messageFromClientProtobuf.Request.PreKeyBundle)
+			return deliverRequestedPreKeyBundle(websocketConnection, messageFromClientProtobuf.Request.PreKeyBundle)
 		case messageFromClientProtobuf.Request.Auth != nil:
 			return errors.New("Backend should request authentication, not the client")
 		} // Inner switch {
@@ -180,7 +180,7 @@ func processMessage(websocketConnection *gorillaWebSocket.Conn) error {
 	// The only time it should reach the default case is when both messageFromClientProtobuf.Request == nil && messageFromClientProtobuf.Response == nil
 	default:
 		if messageFromClientProtobuf.Error != "" {
-			// @TODO HANDLE DIFFERENT TYPES OF ERRORS
+			return errors.New(messageFromClientProtobuf.Error)
 		}
 
 		if messageFromClientProtobuf.RequestID != "" {
@@ -260,7 +260,7 @@ func handleMessageFromClient(websocketConnection *gorillaWebSocket.Conn, message
 	return nil
 } // func handleMessageFromClient
 
-func deliverRequestedPreKeyBundle(websocketConnection *gorillaWebSocket.Conn, requestedPreKeyBundle []byte) {
+func deliverRequestedPreKeyBundle(websocketConnection *gorillaWebSocket.Conn, requestedPreKeyBundle []byte) error {
 	// Create a string representation of the publicKey associated with the user in the preKeyBundle request
 	requestedPreKeyBundleString := string(requestedPreKeyBundle)
 	// Initialize an empty variable to hold the marshaled protobuf bytes of our response to the client
@@ -324,8 +324,7 @@ func deliverRequestedPreKeyBundle(websocketConnection *gorillaWebSocket.Conn, re
 		messageToClientProtobufBytes, messageToClientProtobufErr = golangProto.Marshal(&messageToClientProtobuf)
 	} // if protobufMessageToClientErr != nil {
 	// Send our message over the websocket connection
-	websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientProtobufBytes)
-	// @TODO HANDLE ERROR HERE?
+	return websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientProtobufBytes)
 }
 
 func deliverMessages(websocketConnection *gorillaWebSocket.Conn, messagesToBeDelivered [][]byte) {
@@ -363,8 +362,10 @@ func deliverMessages(websocketConnection *gorillaWebSocket.Conn, messagesToBeDel
 		messageToClientProtobufBytes, messageToClientProtobufErr = golangProto.Marshal(&messageToClientProtobuf)
 	}
 	// Send the mashalled protobuf message structure over the websocket connection
-	websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientProtobufBytes)
-	// @TODO HANDLE ERROR HERE?
+	if writeMessageErr := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientProtobufBytes); writeMessageErr != nil {
+		log.Println(writeMessageErr)
+	} // if writeMessageErr
+
 } // func deliverMessages
 
 func requestAuth(websocketConnection *gorillaWebSocket.Conn) (string, error) {
