@@ -409,8 +409,8 @@ func requestAuth(websocketConnection *gorillaWebSocket.Conn) (string, error) {
 	} // if protoUnmarshalErr
 	// Create a [32]byte{} identityPublicKey to satisfy cryptoEd25519.Verify() type requirements
 	identityPublicKey := [32]byte{}
-	// Create a [64]byte{} signedByteSequenceFromClient to satisfy cryptoEd25519.Verify() type requirements
-	signedByteSequenceFromClient := [64]byte{}
+	// Create a [64]byte{} byteSequenceToSignSignature to satisfy cryptoEd25519.Verify() type requirements
+	byteSequenceToSignSignature := [64]byte{}
 	// Create a string representation of the Identity Public Key
 	identityPublicKeyString := string(messageFromClient.Response.Auth.IdentityPublicKey)
 	// Decode the hex representation of the identityPublicKey here as transmitting it over the network without hex encoding can cause issues with some clients
@@ -428,10 +428,10 @@ func requestAuth(websocketConnection *gorillaWebSocket.Conn) (string, error) {
 	}
 	// Fill the newly created identityPublicKey with the hex decoded representation of the IdentityPublicKey contained in the response from the client
 	copy(identityPublicKey[:], identityPublicKeyDecoded)
-	// Fill the newly created signedByteSequenceFromClient with the Signature contained in the response from the client
-	copy(signedByteSequenceFromClient[:], messageFromClient.Response.Auth.Signature)
+	// Fill the newly created byteSequenceToSignSignature with the Signature contained in the response from the client
+	copy(byteSequenceToSignSignature[:], messageFromClient.Response.Auth.Signature)
 	// Verify the validity of the signature using cryptoEd25519.Verify()
-	if cryptoEd25519.Verify(identityPublicKey[:], byteSequenceThatClientSigned, signedByteSequenceFromClient[:]) {
+	if cryptoEd25519.Verify(identityPublicKey[:], byteSequenceThatClientSigned, byteSequenceToSignSignature[:]) {
 		// If the signed byte sequence from client has a valid signature, echo the authentication attempt back to the client so that he knows it was successful
 		if writeMessageError := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageFromClientProto); writeMessageError != nil {
 			// If there is an error while sending a message to a client
