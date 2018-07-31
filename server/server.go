@@ -145,6 +145,10 @@ func processMessage(websocketConnection *gorillaWebSocket.Conn) error {
 		return errors.New("A message can’t have a response and a request at the same time")
 	// If the message is a request
 	case messageFromClientProtobuf.Request != nil:
+		// In case a requestID is missing from a client request
+		if messageFromClientProtobuf.RequestID == "" {
+			return errors.New("A valid client request should always have a RequestID")
+		} // if messageFromClientProtobuf.RequestID
 		// Inner switch in case we have a Request from client, cases are valid if they are true
 		switch {
 		case messageFromClientProtobuf.Request.Messages != nil:
@@ -179,11 +183,11 @@ func processMessage(websocketConnection *gorillaWebSocket.Conn) error {
 			// @TODO HANDLE DIFFERENT TYPES OF ERRORS
 		}
 
-		if string(messageFromClientProtobuf.RequestID) != "" {
+		if messageFromClientProtobuf.RequestID != "" {
 			// @TODO RESPOND TO THIS REQUEST
 		}
 
-		if string(messageFromClientProtobuf.RequestID) == "" {
+		if messageFromClientProtobuf.RequestID == "" {
 			// @TODO AKNOWLEDGE THAT EVERYTHING IS OK
 		}
 	}

@@ -226,6 +226,8 @@ func (c *Client) testUploadSignedPreKey(t *testing.T) {
 func (c *Client) testSendMessage(t *testing.T, receiverPreKeyBundlePublic PreKeyBundlePublic) {
 	// Initialize our Message structure to send a request to the backend
 	messageToBackendProto := backendProtobuf.BackendMessage{}
+	// Set a request id
+	messageToBackendProto.RequestID = "@TODO"
 	// Initialize an empty Request structure
 	messageToBackendProto.Request = &backendProtobuf.BackendMessage_Request{}
 	// Create a key store for the message Sender using the mnemonic from the client
@@ -314,6 +316,8 @@ func (c *Client) testSendMessage(t *testing.T, receiverPreKeyBundlePublic PreKey
 func (c *Client) testRequestPreKeyBundle(t *testing.T, preKeyBundleIdentifier []byte) PreKeyBundlePublic {
 	// Initialize our Message structure to send a request to the backend
 	messageToBackendProto := backendProtobuf.BackendMessage{}
+	// Set a request id
+	messageToBackendProto.RequestID = "@TODO"
 	// Initialize an empty Request structure
 	messageToBackendProto.Request = &backendProtobuf.BackendMessage_Request{}
 	// Fill in the key of the client we want to requirest a pre key bundle for so that we can chat with
@@ -334,6 +338,7 @@ func (c *Client) testRequestPreKeyBundle(t *testing.T, preKeyBundleIdentifier []
 	testifyRequire.Nil(t, protoUnmarshalErr)
 	// Get the Response from the received message
 	responseFromBackend := messageFromBackendProtobuf.Response
+	testifyRequire.Equal(t, "", messageFromBackendProtobuf.Error)
 	// Get the PreKeyBundle from the received response
 	preKeyBundleFromBackend := responseFromBackend.PreKeyBundle
 	// Get the OneTimePreKey from the received pre key bundle
