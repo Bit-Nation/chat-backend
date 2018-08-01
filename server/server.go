@@ -239,7 +239,7 @@ func handleMessageFromClient(websocketConnection *gorillaWebSocket.Conn, message
 			return chatMessageProtobufError
 		} // if chatMessageProtobufError != nil
 		// Convert the identityPublicKey of the intented recipient of the message into a string so that it's easier to use
-		messageReceiverString := string(singleMessageFromClient.Receiver)
+		messageReceiverString := hex.EncodeToString(singleMessageFromClient.Receiver)
 		// Use the string representation of the identityPublicKey as part of our backend storage
 		multiUserChatMessage[messageReceiverString] = append(multiUserChatMessage[messageReceiverString], chatMessageProtobufBytes)
 		// Echo back the same message we received from the client back to him so that we inform him that the message has been persisted
@@ -253,7 +253,7 @@ func handleMessageFromClient(websocketConnection *gorillaWebSocket.Conn, message
 
 func deliverRequestedPreKeyBundle(websocketConnection *gorillaWebSocket.Conn, requestedPreKeyBundle []byte) error {
 	// Create a string representation of the publicKey associated with the user in the preKeyBundle request
-	requestedPreKeyBundleString := string(requestedPreKeyBundle)
+	requestedPreKeyBundleString := hex.EncodeToString(requestedPreKeyBundle)
 	// Initialize an empty variable to hold the marshaled protobuf bytes of our response to the client
 	var messageToClientProtobufBytes []byte
 	// Initialize an empty variable to hold a protobuf error in case there is one
@@ -400,13 +400,8 @@ func requestAuth(websocketConnection *gorillaWebSocket.Conn) (string, error) {
 	// Create a [64]byte{} byteSequenceToSignSignature to satisfy cryptoEd25519.Verify() type requirements
 	byteSequenceToSignSignature := [64]byte{}
 	// Create a string representation of the Identity Public Key
-	identityPublicKeyString := string(messageFromClient.Response.Auth.IdentityPublicKey)
+	identityPublicKeyBytes := messageFromClient.Response.Auth.IdentityPublicKey
 	// Decode the hex representation of the identityPublicKey here as transmitting it over the network without hex encoding can cause issues with some clients
-	identityPublicKeyDecoded, identityPublicKeyDecodedErr := hex.DecodeString(identityPublicKeyString)
-	// If there is an error while decoding the hex identity public key, terminate the connection
-	if identityPublicKeyDecodedErr != nil {
-		return "", identityPublicKeyDecodedErr
-	}
 	// Get the byte sequence which was signed by the client
 	byteSequenceThatClientSigned := messageFromClient.Response.Auth.ToSign
 	if len(byteSequenceThatClientSigned) != 8 {
@@ -418,11 +413,11 @@ func requestAuth(websocketConnection *gorillaWebSocket.Conn) (string, error) {
 		return "", errors.New("Client is only allowed to append a byte sequence, and not to modify the one which was sent")
 	}
 	// Make sure that the identityPublicKey is exactly 32 bytes
-	if len(identityPublicKey) != 32 {
+	if len(identityPublicKeyBytes) != 32 {
 		return "", errors.New("identityPublicKey should be exactly 32 bytes")
 	} // if len(identityPublicKey) != 32
 	// Fill the newly created identityPublicKey with the hex decoded representation of the IdentityPublicKey contained in the response from the client
-	copy(identityPublicKey[:], identityPublicKeyDecoded)
+	copy(identityPublicKey[:], identityPublicKeyBytes)
 	// Make sure that the Signature is exactly 64 bytes
 	if len(messageFromClient.Response.Auth.Signature) != 64 {
 		return "", errors.New("Signature should be exactly 64 bytes")
@@ -436,7 +431,7 @@ func requestAuth(websocketConnection *gorillaWebSocket.Conn) (string, error) {
 			return "", writeMessageError
 		} // if writeMessageError
 		// Return the identityPublicKey of the authenticated client
-		return identityPublicKeyString, nil
+		return hex.EncodeToString(identityPublicKeyBytes), nil
 	} // if cryptoEd25519.Verify
 	// If cryptoEd25519.Verify() failed to verify the signature, return a matching reponse
 	return "", errors.New("Invalid Signature")

@@ -69,8 +69,11 @@ func TestHandleWebSocketConnection(t *testing.T) {
 	clientReceiver.testUploadSignedPreKey(t)
 	// Initial message sender needs to pass authentication
 	clientSender.testAuth(t)
+	// Get a hex decoded byte representation of the identity public key for the initial message receiver that we want to chat with
+	identityPublicKeyBytes, identityPublicKeyBytesErr := hex.DecodeString("22cfd1af5798544287cbf7721a0a4ebc2506d6f4df05413355a7f5cc86740724")
+	testifyRequire.Nil(t, identityPublicKeyBytesErr)
 	// Initial message sender needs to request the pre key bundle of the receiver
-	remotePreKeyBundlePublic := clientSender.testRequestPreKeyBundle(t, []byte("22cfd1af5798544287cbf7721a0a4ebc2506d6f4df05413355a7f5cc86740724"))
+	remotePreKeyBundlePublic := clientSender.testRequestPreKeyBundle(t, identityPublicKeyBytes)
 	// Initial message sender sends a message to the backend to get persisted
 	clientSender.testSendMessage(t, remotePreKeyBundlePublic)
 	// Receiver reconnects
@@ -352,13 +355,12 @@ func (c *Client) testRequestPreKeyBundle(t *testing.T, preKeyBundleIdentifier []
 	// Get the identity public key corresponding to the received pre key bundle from the backend
 	identityPublicKeyFromBackend := profileFromBackend.IdentityPubKey
 	// Hex encode the identity public key corresponding to the received pre key bundle from the backend
-	identityPublicKeyFromBackendHex := hex.EncodeToString(identityPublicKeyFromBackend)
 	// Make sure that the hex encoded identity public key we used to make the initial request is the same as the one returned by the backend
-	testifyRequire.Equal(t, string(preKeyBundleIdentifier), identityPublicKeyFromBackendHex)
+	testifyRequire.Equal(t, preKeyBundleIdentifier, identityPublicKeyFromBackend)
 	// Create a public pre key bundle structure
 	requrestedPreKeyBundle := PreKeyBundlePublic{}
 	// Set the pre key bundle IdentityKey
-	requrestedPreKeyBundle.BundleIdentityKey = identityPublicKeyFromBackendHex
+	requrestedPreKeyBundle.BundleIdentityKey = identityPublicKeyFromBackend
 	// Set the pre key bundle ChatIdentityKey
 	copy(requrestedPreKeyBundle.BundleChatIdentityKey[:], profileFromBackend.ChatIdentityPubKey[:])
 	// Set the pre key bundle OneTimePreKey
@@ -507,8 +509,9 @@ func (c *Client) testAuth(t *testing.T) {
 	// Get Client's hex encoded identity public key
 	identityPublicKeyClientHex, identityPublicKeyClientHexErr := keyManagerClient.IdentityPublicKey()
 	testifyRequire.Nil(t, identityPublicKeyClientHexErr)
-	// Represent Client's hex encoded identity public key as bytes
-	identityPublicKeyClientBytes := []byte(identityPublicKeyClientHex)
+	// Decode Client's hex encoded identity public key as bytes
+	identityPublicKeyClientBytes, identityPublicKeyClientErr := hex.DecodeString(identityPublicKeyClientHex)
+	testifyRequire.Nil(t, identityPublicKeyClientErr)
 	// Set the bytes prespresentation of Client's hex encoded identity public key in our protobuf Auth structure so we can send it to the server
 	messageToBackend.Response.Auth.IdentityPublicKey = identityPublicKeyClientBytes
 	// Set Client's 8 byte sequence which was signed in our protobuf Auth structure so we can send it to the server
@@ -557,7 +560,7 @@ type PreKeyBundlePublic struct {
 	BundleChatIdentityKey bitnationX3dh.PublicKey
 	BundleSignedPreKey    bitnationX3dh.PublicKey
 	BundleOneTimePreKey   bitnationX3dh.PublicKey
-	BundleIdentityKey     string
+	BundleIdentityKey     []byte
 	BundleSignature       [64]byte
 }
 
@@ -581,11 +584,7 @@ func (b *PreKeyBundlePublic) OneTimePreKey() *bitnationX3dh.PublicKey {
 func (b *PreKeyBundlePublic) ValidSignature() (bool, error) {
 	// @TODO REMOVE RETURN TRUE AND CALCULATE SIGNATURE IN ANOTHER WAY
 	return true, nil
-	rawIDKey, err := hex.DecodeString(b.BundleIdentityKey)
-	if err != nil {
-		return false, nil
-	}
-	return cryptoEd25519.Verify(rawIDKey[:], b.hashBundle(), b.BundleSignature[:]), nil
+	return cryptoEd25519.Verify(b.BundleIdentityKey[:], b.hashBundle(), b.BundleSignature[:]), nil
 }
 
 // sign profile with given private key
