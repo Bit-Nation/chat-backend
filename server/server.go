@@ -184,7 +184,7 @@ func processMessage(websocketConnection *gorillaWebSocket.Conn) error {
 		}
 
 		if messageFromClientProtobuf.RequestID == "" {
-			// @TODO AKNOWLEDGE THAT EVERYTHING IS OK
+			websocketConnection.Close()
 		}
 	}
 	return nil
