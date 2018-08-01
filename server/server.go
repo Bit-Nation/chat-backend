@@ -171,7 +171,7 @@ func processMessage(websocketConnection *gorillaWebSocket.Conn, authenticatedIde
 		case messageFromClientProtobuf.Response.PreKeyBundle != nil:
 			return errors.New("Only backend is allowed to provide a PreKeyBundle")
 		case messageFromClientProtobuf.Response.SignedPreKey != nil:
-			return persistSignedPreKeyFromClient(websocketConnection, messageFromClientProtobuf.Response.SignedPreKey)
+			return persistSignedPreKeyFromClient(websocketConnection, messageFromClientProtobuf.Response.SignedPreKey, authenticatedIdentityPublicKeyClient)
 		} // Inner switch in case we have a Response from client
 
 	// The only time it should reach the default case is when both messageFromClientProtobuf.Request == nil && messageFromClientProtobuf.Response == nil
@@ -223,7 +223,18 @@ func persistOneTimeKeysFromClient(websocketConnection *gorillaWebSocket.Conn, on
 	return nil
 } // func persistOneTimeKeysFromClient
 
-func persistSignedPreKeyFromClient(websocketConnection *gorillaWebSocket.Conn, signedPreKeyFromClient *backendProtobuf.PreKey) error {
+func persistSignedPreKeyFromClient(websocketConnection *gorillaWebSocket.Conn, signedPreKeyFromClient *backendProtobuf.PreKey, authenticatedIdentityPublicKeyClient cryptoEd25519.PublicKey) error {
+	// Create a preKey object so that we can use methods like VerifySignature()
+	signedPreKeyFromClientPreKey, signedPreKeyFromClientErr := preKey.FromProtoBuf(*signedPreKeyFromClient)
+	if signedPreKeyFromClientErr != nil {
+		return signedPreKeyFromClientErr
+	} // if signedPreKeyFromClientErr != nil
+	// Make sure that the keys received by the client are actually sent by the client
+	signedPreKeyFromClientSignatureIsValid, signedPreKeyFromClientSignatureErr := signedPreKeyFromClientPreKey.VerifySignature(authenticatedIdentityPublicKeyClient)
+	// If the signature is invalid, don't persist the key and return the error
+	if !signedPreKeyFromClientSignatureIsValid {
+		return signedPreKeyFromClientSignatureErr
+	} // !signedPreKeyFromClientSignatureIsValid
 	// Create a hex representation of the IdentityKey of the client
 	clientIdentityKeyHex := hex.EncodeToString(signedPreKeyFromClient.IdentityKey)
 	// Use protobuf to marshal the signed pre key into bytes so that we can store it easily

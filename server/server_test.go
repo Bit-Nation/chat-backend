@@ -190,7 +190,7 @@ func (c *Client) testUploadOneTimePreKeys(t *testing.T) {
 		// Make sure the backend echoes back the oneTimePreKey we sent to confirm that the OneTimePreKeys were persisted
 		testifyRequire.Equal(t, messageFromBackendProtobufBytes, oneTimePreKeyBytes)
 	} // for _, oneTimePreKey
-} // testSendOneTimePreKeys
+} // testUploadOneTimePreKeys
 
 func (c *Client) testUploadSignedPreKey(t *testing.T) {
 	// Initialize our Message structure to send a request to the backend
@@ -198,16 +198,15 @@ func (c *Client) testUploadSignedPreKey(t *testing.T) {
 	// Initialize an empty Response structure
 	messageToBackendProtobuf.Response = &backendProtobuf.BackendMessage_Response{}
 	// Initialize an empty PreKey structure
-	preKeyProtobuf := backendProtobuf.PreKey{}
-	// Set the Key field in the PreKey structure to the PublicKey from the signedPreKey bitnationX3dh.KeyPair
-	preKeyProtobuf.Key = c.SignedPreKey.PublicKey[:]
-	// Set the IdentityKey in PreKey structure to the IdentityPubKey in the Client profile
-	preKeyProtobuf.IdentityKey = c.Profile.Information.IdentityPubKey
-	// Sign the IdentityKey with the KeyManager of the client
-	identityKeySignature, identityKeySignatureErr := c.KeyManager.IdentitySign(preKeyProtobuf.IdentityKey)
-	testifyRequire.Nil(t, identityKeySignatureErr)
-	// Set the IdentityKeySignature in the PreKey structure to the resulting signature of the IdentitySign process
-	preKeyProtobuf.IdentityKeySignature = identityKeySignature
+	preKeyObject := preKey.PreKey{}
+	// Set the Key field in the PreKey structure to the PublicKey from the SignedPreKey bitnationX3dh.KeyPair
+	preKeyObject.PublicKey = c.SignedPreKey.PublicKey
+	// Sign the pre key object with the Client's key manager
+	preKeySignErr := preKeyObject.Sign(c.KeyManager)
+	testifyRequire.Nil(t, preKeySignErr)
+	// Marshal the signed PreKey structure
+	preKeyProtobuf, preKeyProtobufErr := preKeyObject.ToProtobuf()
+	testifyRequire.Nil(t, preKeyProtobufErr)
 	// Append the PreKey structure to the message response we are about to send to the backend
 	messageToBackendProtobuf.Response.SignedPreKey = &preKeyProtobuf
 	// Use protobuf to marshal the message response we are about to send
@@ -224,7 +223,7 @@ func (c *Client) testUploadSignedPreKey(t *testing.T) {
 	testifyRequire.Nil(t, protoMarshalErr)
 	// Make sure the backend echoes back the signedPreKey we sent to confirm that the signedPreKey was persisted
 	testifyRequire.Equal(t, messageFromBackendProtobufBytes, signedPreKeyBytes)
-} // testSendOneTimePreKeys
+} // testUploadSignedPreKey
 
 func (c *Client) testSendMessage(t *testing.T, receiverPreKeyBundlePublic PreKeyBundlePublic) {
 	// Initialize our Message structure to send a request to the backend
