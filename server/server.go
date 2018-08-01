@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 
+	preKey "github.com/Bit-Nation/panthalassa/chat/prekey"
 	backendProtobuf "github.com/Bit-Nation/protobuffers"
 	golangProto "github.com/golang/protobuf/proto"
 	gorillaMux "github.com/gorilla/mux"
@@ -58,7 +59,7 @@ func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 		return
 	}
 	// Require successful authentication before allowing a client to send a message
-	authenticatedIdentityPublicKeyHexClient, websocketConnectionRequestAuthErr := requestAuth(websocketConnection)
+	authenticatedIdentityPublicKeyClient, websocketConnectionRequestAuthErr := requestAuth(websocketConnection)
 	// If the authentication failed,
 	if websocketConnectionRequestAuthErr != nil {
 		// Log a failed authentication attempt
@@ -75,16 +76,16 @@ func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 	} // if websocketConnectionRequestAuthErr != nil
 
 	// Check if there are pending messages to be delivered when the client comes back online
-	if messagesToBeDelivered, ok := multiUserChatMessage[authenticatedIdentityPublicKeyHexClient]; ok {
+	if messagesToBeDelivered, ok := multiUserChatMessage[hex.EncodeToString(authenticatedIdentityPublicKeyClient)]; ok {
 		deliverMessages(websocketConnection, messagesToBeDelivered)
 	} // if messagesToBeDelivered
 
 	// Try to process a message from the client
-	websocketConnectionProcessMessageErr := processMessage(websocketConnection)
+	websocketConnectionProcessMessageErr := processMessage(websocketConnection, authenticatedIdentityPublicKeyClient)
 	// For as long as we don't enounter an error while processing messages from the client
 	for websocketConnectionProcessMessageErr == nil {
 		// Process messages from the client
-		websocketConnectionProcessMessageErr = processMessage(websocketConnection)
+		websocketConnectionProcessMessageErr = processMessage(websocketConnection, authenticatedIdentityPublicKeyClient)
 	} // for websocketConnectionProcessMessageErr == nil
 	// Once we enounter an error while processing messages from the client
 	// Log the error we encountered
@@ -121,7 +122,7 @@ func sendErrorToClient(encounteredError error, websocketConnection *gorillaWebSo
 	return nil
 } // func sendErrorToClient
 
-func processMessage(websocketConnection *gorillaWebSocket.Conn) error {
+func processMessage(websocketConnection *gorillaWebSocket.Conn, authenticatedIdentityPublicKeyClient []byte) error {
 	// Initialize an empty variable to hold the protobuf message
 	var messageFromClientProtobuf backendProtobuf.BackendMessage
 	// Read a message from a client over the websocket connection
@@ -166,7 +167,7 @@ func processMessage(websocketConnection *gorillaWebSocket.Conn) error {
 		case messageFromClientProtobuf.Response.Auth != nil:
 			return errors.New("Authentication should not be handled here")
 		case messageFromClientProtobuf.Response.OneTimePrekeys != nil:
-			return persistOneTimeKeysFromClient(websocketConnection, messageFromClientProtobuf.Response.OneTimePrekeys)
+			return persistOneTimeKeysFromClient(websocketConnection, messageFromClientProtobuf.Response.OneTimePrekeys, authenticatedIdentityPublicKeyClient)
 		case messageFromClientProtobuf.Response.PreKeyBundle != nil:
 			return errors.New("Only backend is allowed to provide a PreKeyBundle")
 		case messageFromClientProtobuf.Response.SignedPreKey != nil:
@@ -190,9 +191,20 @@ func processMessage(websocketConnection *gorillaWebSocket.Conn) error {
 	return nil
 } // func processMessage
 
-func persistOneTimeKeysFromClient(websocketConnection *gorillaWebSocket.Conn, oneTimePreKeysFromClient []*backendProtobuf.PreKey) error {
+func persistOneTimeKeysFromClient(websocketConnection *gorillaWebSocket.Conn, oneTimePreKeysFromClient []*backendProtobuf.PreKey, authenticatedIdentityPublicKeyClient cryptoEd25519.PublicKey) error {
 	// For each one time pre key received from client
 	for _, oneTimePreKeyFromClient := range oneTimePreKeysFromClient {
+		// Create a preKey object so that we can use methods like VerifySignature()
+		oneTimePreKeyFromClientPreKey, oneTimePreKeyFromClientErr := preKey.FromProtoBuf(*oneTimePreKeyFromClient)
+		if oneTimePreKeyFromClientErr != nil {
+			return oneTimePreKeyFromClientErr
+		} // if oneTimePreKeyFromClientErr != nil
+		// Make sure that the keys received by the client are actually sent by the client
+		oneTimePreKeyFromClientSignatureIsValid, oneTimePreKeyFromClientSignatureErr := oneTimePreKeyFromClientPreKey.VerifySignature(authenticatedIdentityPublicKeyClient)
+		// If the signature is invalid, don't persist the key and return the error
+		if !oneTimePreKeyFromClientSignatureIsValid {
+			return oneTimePreKeyFromClientSignatureErr
+		} // !oneTimePreKeyFromClientSignatureIsValid
 		// Create a hex representation of the IdentityKey of the client
 		clientIdentityKeyHex := hex.EncodeToString(oneTimePreKeyFromClient.IdentityKey)
 		// Use protobuf to marshal the one time pre key into bytes so that we can store it easily
@@ -358,7 +370,7 @@ func deliverMessages(websocketConnection *gorillaWebSocket.Conn, messagesToBeDel
 
 } // func deliverMessages
 
-func requestAuth(websocketConnection *gorillaWebSocket.Conn) (string, error) {
+func requestAuth(websocketConnection *gorillaWebSocket.Conn) ([]byte, error) {
 	// Initialize an empty Message structure
 	messageFromClient := backendProtobuf.BackendMessage{}
 	// Initialize an empty Response structure
@@ -373,7 +385,7 @@ func requestAuth(websocketConnection *gorillaWebSocket.Conn) (string, error) {
 	backendRandomBytes := make([]byte, 4)
 	// Read random bytes into our slice, in case of an error, return it
 	if _, randomBytesErr := rand.Read(backendRandomBytes); randomBytesErr != nil {
-		return "", randomBytesErr
+		return nil, randomBytesErr
 	} // if randomBytesErr != nil
 	// Set the byte sequence that the client needs to sign
 	messageToClient.Request.Auth.ToSign = backendRandomBytes
@@ -381,7 +393,7 @@ func requestAuth(websocketConnection *gorillaWebSocket.Conn) (string, error) {
 	messageToClientBytes, messageToClientBytesErr := golangProto.Marshal(&messageToClient)
 	// If there is an error while trying to perform protobuf marshaling, terminate the connection
 	if messageToClientBytesErr != nil {
-		return "", messageToClientBytesErr
+		return nil, messageToClientBytesErr
 	} // if messageToClientBytesErr != nil
 	// Send the protobuf data to the client containing the sequence of bytes he needs to sign
 	websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientBytes)
@@ -389,11 +401,11 @@ func requestAuth(websocketConnection *gorillaWebSocket.Conn) (string, error) {
 	_, messageFromClientProto, readMessageErr := websocketConnection.ReadMessage()
 	// In case of an error, terminate the connection
 	if readMessageErr != nil {
-		return "", readMessageErr
+		return nil, readMessageErr
 	}
 	// Unmarshal the response from the client into our protobuf Auth structure, and in case of an error, terminate the connection
 	if protoUnmarshalErr := golangProto.Unmarshal(messageFromClientProto, &messageFromClient); protoUnmarshalErr != nil {
-		return "", protoUnmarshalErr
+		return nil, protoUnmarshalErr
 	} // if protoUnmarshalErr
 	// Create a [32]byte{} identityPublicKey to satisfy cryptoEd25519.Verify() type requirements
 	identityPublicKey := [32]byte{}
@@ -405,22 +417,22 @@ func requestAuth(websocketConnection *gorillaWebSocket.Conn) (string, error) {
 	// Get the byte sequence which was signed by the client
 	byteSequenceThatClientSigned := messageFromClient.Response.Auth.ToSign
 	if len(byteSequenceThatClientSigned) != 8 {
-		return "", errors.New("Signed byte sequence should be exactly 8 bytes")
+		return nil, errors.New("Signed byte sequence should be exactly 8 bytes")
 	} // if len(byteSequenceThatClientSigned) != 8
 	// Check if the byte sequence that was signed by the client contains the initial bytes we sent to the client
 	if !bytes.HasPrefix(byteSequenceThatClientSigned, backendRandomBytes) {
 		// If the client has modified the bytes we sent, return an error pointing out that this behavior is not allowed
-		return "", errors.New("Client is only allowed to append a byte sequence, and not to modify the one which was sent")
+		return nil, errors.New("Client is only allowed to append a byte sequence, and not to modify the one which was sent")
 	}
 	// Make sure that the identityPublicKey is exactly 32 bytes
 	if len(identityPublicKeyBytes) != 32 {
-		return "", errors.New("identityPublicKey should be exactly 32 bytes")
+		return nil, errors.New("identityPublicKey should be exactly 32 bytes")
 	} // if len(identityPublicKey) != 32
 	// Fill the newly created identityPublicKey with the hex decoded representation of the IdentityPublicKey contained in the response from the client
 	copy(identityPublicKey[:], identityPublicKeyBytes)
 	// Make sure that the Signature is exactly 64 bytes
 	if len(messageFromClient.Response.Auth.Signature) != 64 {
-		return "", errors.New("Signature should be exactly 64 bytes")
+		return nil, errors.New("Signature should be exactly 64 bytes")
 	} // if len(messageFromClient.Response.Auth.Signature) != 32
 	// Fill the newly created byteSequenceToSignSignature with the Signature contained in the response from the client
 	copy(byteSequenceToSignSignature[:], messageFromClient.Response.Auth.Signature)
@@ -428,11 +440,11 @@ func requestAuth(websocketConnection *gorillaWebSocket.Conn) (string, error) {
 	if cryptoEd25519.Verify(identityPublicKey[:], byteSequenceThatClientSigned, byteSequenceToSignSignature[:]) {
 		// If the signed byte sequence from client has a valid signature, echo the authentication attempt back to the client so that he knows it was successful
 		if writeMessageError := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageFromClientProto); writeMessageError != nil {
-			return "", writeMessageError
+			return nil, writeMessageError
 		} // if writeMessageError
 		// Return the identityPublicKey of the authenticated client
-		return hex.EncodeToString(identityPublicKeyBytes), nil
+		return identityPublicKeyBytes, nil
 	} // if cryptoEd25519.Verify
 	// If cryptoEd25519.Verify() failed to verify the signature, return a matching reponse
-	return "", errors.New("Invalid Signature")
+	return nil, errors.New("Invalid Signature")
 } // func requestAuth

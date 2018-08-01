@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"testing"
 
+	preKey "github.com/Bit-Nation/panthalassa/chat/prekey"
 	panthalassaKeyManager "github.com/Bit-Nation/panthalassa/keyManager"
 	panthalassaKeyStore "github.com/Bit-Nation/panthalassa/keyStore"
 	panthalassaMnemonic "github.com/Bit-Nation/panthalassa/mnemonic"
@@ -161,16 +162,15 @@ func (c *Client) testUploadOneTimePreKeys(t *testing.T) {
 	// For each oneTimePreKey
 	for _, oneTimePreKey := range c.OneTimePreKeys {
 		// Initialize an empty PreKey structure
-		preKeyProtobuf := backendProtobuf.PreKey{}
+		preKeyObject := preKey.PreKey{}
 		// Set the Key field in the PreKey structure to the PublicKey from the oneTimePreKey bitnationX3dh.KeyPair
-		preKeyProtobuf.Key = oneTimePreKey.PublicKey[:]
-		// Set the IdentityKey in PreKey structure to the IdentityPubKey in the Client profile
-		preKeyProtobuf.IdentityKey = c.Profile.Information.IdentityPubKey
-		// Sign the IdentityKey with the KeyManager of the client
-		identityKeySignature, identityKeySignatureErr := c.KeyManager.IdentitySign(preKeyProtobuf.IdentityKey)
-		testifyRequire.Nil(t, identityKeySignatureErr)
-		// Set the IdentityKeySignature in the PreKey structure to the resulting signature of the IdentitySign process
-		preKeyProtobuf.IdentityKeySignature = identityKeySignature
+		preKeyObject.PublicKey = oneTimePreKey.PublicKey
+		// Sign the pre key object with the Client's key manager
+		preKeySignErr := preKeyObject.Sign(c.KeyManager)
+		testifyRequire.Nil(t, preKeySignErr)
+		// Marshal the signed PreKey structure
+		preKeyProtobuf, preKeyProtobufErr := preKeyObject.ToProtobuf()
+		testifyRequire.Nil(t, preKeyProtobufErr)
 		// Append the PreKey structure to the message response we are about to send to the backend
 		messageToBackendProtobuf.Response.OneTimePrekeys = append(messageToBackendProtobuf.Response.OneTimePrekeys, &preKeyProtobuf)
 	} // for _, oneTimePreKey := range c.OneTimePreKeys
