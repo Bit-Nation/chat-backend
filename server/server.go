@@ -9,7 +9,6 @@ import (
 	"log"
 	"net/http"
 
-	preKey "github.com/Bit-Nation/panthalassa/chat/prekey"
 	backendProtobuf "github.com/Bit-Nation/protobuffers"
 	golangProto "github.com/golang/protobuf/proto"
 	gorillaMux "github.com/gorilla/mux"
@@ -194,17 +193,6 @@ func processMessage(websocketConnection *gorillaWebSocket.Conn, authenticatedIde
 func persistOneTimeKeysFromClient(websocketConnection *gorillaWebSocket.Conn, oneTimePreKeysFromClient []*backendProtobuf.PreKey, authenticatedIdentityPublicKeyClient cryptoEd25519.PublicKey) error {
 	// For each one time pre key received from client
 	for _, oneTimePreKeyFromClient := range oneTimePreKeysFromClient {
-		// Create a preKey object so that we can use methods like VerifySignature()
-		oneTimePreKeyFromClientPreKey, oneTimePreKeyFromClientErr := preKey.FromProtoBuf(*oneTimePreKeyFromClient)
-		if oneTimePreKeyFromClientErr != nil {
-			return oneTimePreKeyFromClientErr
-		} // if oneTimePreKeyFromClientErr != nil
-		// Make sure that the keys received by the client are actually sent by the client
-		oneTimePreKeyFromClientSignatureIsValid, oneTimePreKeyFromClientSignatureErr := oneTimePreKeyFromClientPreKey.VerifySignature(authenticatedIdentityPublicKeyClient)
-		// If the signature is invalid, don't persist the key and return the error
-		if !oneTimePreKeyFromClientSignatureIsValid {
-			return oneTimePreKeyFromClientSignatureErr
-		} // !oneTimePreKeyFromClientSignatureIsValid
 		// Create a hex representation of the IdentityKey of the client
 		clientIdentityKeyHex := hex.EncodeToString(oneTimePreKeyFromClient.IdentityKey)
 		// Use protobuf to marshal the one time pre key into bytes so that we can store it easily
@@ -224,17 +212,6 @@ func persistOneTimeKeysFromClient(websocketConnection *gorillaWebSocket.Conn, on
 } // func persistOneTimeKeysFromClient
 
 func persistSignedPreKeyFromClient(websocketConnection *gorillaWebSocket.Conn, signedPreKeyFromClient *backendProtobuf.PreKey, authenticatedIdentityPublicKeyClient cryptoEd25519.PublicKey) error {
-	// Create a preKey object so that we can use methods like VerifySignature()
-	signedPreKeyFromClientPreKey, signedPreKeyFromClientErr := preKey.FromProtoBuf(*signedPreKeyFromClient)
-	if signedPreKeyFromClientErr != nil {
-		return signedPreKeyFromClientErr
-	} // if signedPreKeyFromClientErr != nil
-	// Make sure that the keys received by the client are actually sent by the client
-	signedPreKeyFromClientSignatureIsValid, signedPreKeyFromClientSignatureErr := signedPreKeyFromClientPreKey.VerifySignature(authenticatedIdentityPublicKeyClient)
-	// If the signature is invalid, don't persist the key and return the error
-	if !signedPreKeyFromClientSignatureIsValid {
-		return signedPreKeyFromClientSignatureErr
-	} // !signedPreKeyFromClientSignatureIsValid
 	// Create a hex representation of the IdentityKey of the client
 	clientIdentityKeyHex := hex.EncodeToString(signedPreKeyFromClient.IdentityKey)
 	// Use protobuf to marshal the signed pre key into bytes so that we can store it easily
