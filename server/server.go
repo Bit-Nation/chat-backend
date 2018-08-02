@@ -24,8 +24,6 @@ import (
 // @TODO REPLACE WITH GOOGLE DATASTORE
 // Proof of concept backend storage
 var multiUserChatMessage = make(map[string][][]byte)
-var multiUserProfileStore = make(map[string][]byte)
-var multiUserSignedPreKeyStore = make(map[string][]byte)
 var multiUserOneTimePreKeys = make(map[string][][]byte)
 
 // StartWebSocketServer starts the websocket server
@@ -180,7 +178,7 @@ func processMessage(websocketConnection *gorillaWebSocket.Conn, authenticatedIde
 		case messageFromClientProtobuf.Response.PreKeyBundle != nil:
 			return errors.New("Only backend is allowed to provide a PreKeyBundle")
 		case messageFromClientProtobuf.Response.SignedPreKey != nil:
-			return persistSignedPreKeyFromClient(websocketConnection, messageFromClientProtobuf.Response.SignedPreKey, authenticatedIdentityPublicKeyClient)
+			return persistSignedPreKeyFromClient(websocketConnection, messageFromClientProtobuf.Response.SignedPreKey, authenticatedIdentityPublicKeyClient, firestoreClient)
 		} // Inner switch in case we have a Response from client
 
 	// The only time it should reach the default case is when both messageFromClientProtobuf.Request == nil && messageFromClientProtobuf.Response == nil
@@ -221,17 +219,24 @@ func persistOneTimeKeysFromClient(websocketConnection *gorillaWebSocket.Conn, on
 	return nil
 } // func persistOneTimeKeysFromClient
 
-func persistSignedPreKeyFromClient(websocketConnection *gorillaWebSocket.Conn, signedPreKeyFromClient *backendProtobuf.PreKey, authenticatedIdentityPublicKeyClient cryptoEd25519.PublicKey) error {
-	// Create a hex representation of the IdentityKey of the client
-	clientIdentityKeyHex := hex.EncodeToString(signedPreKeyFromClient.IdentityKey)
+func persistSignedPreKeyFromClient(websocketConnection *gorillaWebSocket.Conn, signedPreKeyFromClient *backendProtobuf.PreKey, authenticatedIdentityPublicKeyClient cryptoEd25519.PublicKey, firestoreClient *firestore.Client) error {
 	// Use protobuf to marshal the signed pre key into bytes so that we can store it easily
 	signedPreKeyFromClientProtobufBytes, protoMarshalErr := golangProto.Marshal(signedPreKeyFromClient)
 	// If there is an error while marshalling the signed pre key from the client, return it
 	if protoMarshalErr != nil {
 		return protoMarshalErr
 	}
+	// Initialise an empty context with no values, no deadline, which will never be canceled
+	networkContext := context.Background()
+	// Create a hex representation of the IdentityKey of the client
+	clientIdentityKeyHex := hex.EncodeToString(signedPreKeyFromClient.IdentityKey)
 	// Store the SignedPreKey from the client
-	multiUserSignedPreKeyStore[clientIdentityKeyHex] = signedPreKeyFromClientProtobufBytes
+	_, firestoreWriteDataErr := firestoreClient.Collection("clients").Doc(clientIdentityKeyHex).Set(networkContext, map[string]interface{}{
+		"signedPreKey": base64.StdEncoding.EncodeToString(signedPreKeyFromClientProtobufBytes),
+	}, firestore.MergeAll) // _, firestoreWriteDataErr
+	if firestoreWriteDataErr != nil {
+		return firestoreWriteDataErr
+	} // if firestoreWriteDataErr != nil
 	// Signal to the client that the SignedPreyKey has been persisted
 	if writeMessageError := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, signedPreKeyFromClientProtobufBytes); writeMessageError != nil {
 		return writeMessageError
@@ -331,16 +336,20 @@ func deliverRequestedPreKeyBundle(websocketConnection *gorillaWebSocket.Conn, re
 			// If there is an error with the unmarshalling, fill in the error field in the message to client with the error that occured
 			messageToClientProtobuf.Error = protoUnmarshalErr.Error()
 		} // if protoUnmarshalErr
-	} // if singleUserProfile, ok
-	// If a SignedPreKey which matches the client request exists in our backend storage
-	if singleUserSignedPreKey, ok := multiUserSignedPreKeyStore[requestedPreKeyBundleString]; ok {
-		// Unmarshal it into our SignedPreKey structure
+	} // if singleUserProfileBase64, exists
+	if singleUserSignedPreKeyBase64, exists := clientDataMap["signedPreKey"]; exists {
+		// Base64 decode the it to get the protobuf bytes
+		singleUserSignedPreKey, singleUserSignedPreKeyErr := base64.StdEncoding.DecodeString(singleUserSignedPreKeyBase64.(string))
+		// If there is an error with the base64 decoding, fill in the error field in the message to client with the error that occured
+		if singleUserSignedPreKeyErr != nil {
+			messageToClientProtobuf.Error = singleUserSignedPreKeyErr.Error()
+		} // if singleUserProfileErr
+		// Unmarshal it into our PreKeyBundle structure
 		if protoUnmarshalErr := golangProto.Unmarshal(singleUserSignedPreKey, messageToClientProtobuf.Response.PreKeyBundle.SignedPreKey); protoUnmarshalErr != nil {
 			// Fill in the error field in the message to client with the error that occured
 			messageToClientProtobuf.Error = protoUnmarshalErr.Error()
 		} // if protoUnmarshalErr != nil
-	} // if singleUserSignedPreKey, ok
-
+	} // if singleUserSignedPreKeyBase64, exists
 	// If OneTimePreKeys which match the client request exist in our backend storage
 	if singleUserOneTimePreKeys, ok := multiUserOneTimePreKeys[requestedPreKeyBundleString]; ok {
 		// Create a variable to temporarily store a single OneTimePreKey
