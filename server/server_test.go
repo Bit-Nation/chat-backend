@@ -166,6 +166,9 @@ func (c *Client) testUploadOneTimePreKeys(t *testing.T) {
 		preKeyProtobuf.Key = oneTimePreKey.PublicKey[:]
 		// Set the IdentityKey in PreKey structure to the IdentityPubKey in the Client profile
 		preKeyProtobuf.IdentityKey = c.Profile.Information.IdentityPubKey
+		// Set a fix timestamp of the oneTimePreKey
+		// @TODO find out if this timestamp is fixed and related to oneTimePreKey creation time
+		preKeyProtobuf.TimeStamp = 777
 		// Sign the IdentityKey with the KeyManager of the client
 		identityKeySignature, identityKeySignatureErr := c.KeyManager.IdentitySign(preKeyProtobuf.IdentityKey)
 		testifyRequire.Nil(t, identityKeySignatureErr)

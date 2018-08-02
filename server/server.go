@@ -24,7 +24,6 @@ import (
 // @TODO REPLACE WITH GOOGLE DATASTORE
 // Proof of concept backend storage
 var multiUserChatMessage = make(map[string][][]byte)
-var multiUserOneTimePreKeys = make(map[string][][]byte)
 
 // StartWebSocketServer starts the websocket server
 func StartWebSocketServer() {
@@ -174,7 +173,7 @@ func processMessage(websocketConnection *gorillaWebSocket.Conn, authenticatedIde
 		case messageFromClientProtobuf.Response.Auth != nil:
 			return errors.New("Authentication should not be handled here")
 		case messageFromClientProtobuf.Response.OneTimePrekeys != nil:
-			return persistOneTimeKeysFromClient(websocketConnection, messageFromClientProtobuf.Response.OneTimePrekeys, authenticatedIdentityPublicKeyClient)
+			return persistOneTimeKeysFromClient(websocketConnection, messageFromClientProtobuf.Response.OneTimePrekeys, authenticatedIdentityPublicKeyClient, firestoreClient)
 		case messageFromClientProtobuf.Response.PreKeyBundle != nil:
 			return errors.New("Only backend is allowed to provide a PreKeyBundle")
 		case messageFromClientProtobuf.Response.SignedPreKey != nil:
@@ -198,20 +197,26 @@ func processMessage(websocketConnection *gorillaWebSocket.Conn, authenticatedIde
 	return nil
 } // func processMessage
 
-func persistOneTimeKeysFromClient(websocketConnection *gorillaWebSocket.Conn, oneTimePreKeysFromClient []*backendProtobuf.PreKey, authenticatedIdentityPublicKeyClient cryptoEd25519.PublicKey) error {
+func persistOneTimeKeysFromClient(websocketConnection *gorillaWebSocket.Conn, oneTimePreKeysFromClient []*backendProtobuf.PreKey, authenticatedIdentityPublicKeyClient cryptoEd25519.PublicKey, firestoreClient *firestore.Client) error {
+	// Initialise an empty context with no values, no deadline, which will never be canceled
+	networkContext := context.Background()
 	// For each one time pre key received from client
 	for _, oneTimePreKeyFromClient := range oneTimePreKeysFromClient {
-		// Create a hex representation of the IdentityKey of the client
-		clientIdentityKeyHex := hex.EncodeToString(oneTimePreKeyFromClient.IdentityKey)
-		// Use protobuf to marshal the one time pre key into bytes so that we can store it easily
+		// Use protobuf to marshal the oneTimePreKey into bytes so that we can store it easily
 		oneTimePreKeyFromClientProtobufBytes, protoMarshalErr := golangProto.Marshal(oneTimePreKeyFromClient)
 		// If there is an error while marshalling the one time pre key from the client, return it
 		if protoMarshalErr != nil {
 			return protoMarshalErr
 		}
 		// Store the one time pre key from the client
-		multiUserOneTimePreKeys[clientIdentityKeyHex] = append(multiUserOneTimePreKeys[clientIdentityKeyHex], oneTimePreKeyFromClientProtobufBytes)
-		// Signal to the client that the one time pre key has been persisted
+		_, firestoreWriteDataErr := firestoreClient.Collection("clients").Doc(hex.EncodeToString(authenticatedIdentityPublicKeyClient)).Set(networkContext, map[string]interface{}{
+			"oneTimePreKeys": map[string]interface{}{
+				fmt.Sprint(oneTimePreKeyFromClient.TimeStamp): base64.StdEncoding.EncodeToString(oneTimePreKeyFromClientProtobufBytes),
+			},
+		}, firestore.MergeAll)
+		if firestoreWriteDataErr != nil {
+			return firestoreWriteDataErr
+		} // if firestoreWriteDataErr != nil
 		if writeMessageError := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, oneTimePreKeyFromClientProtobufBytes); writeMessageError != nil {
 			return writeMessageError
 		} // if writeMessageError
@@ -225,13 +230,11 @@ func persistSignedPreKeyFromClient(websocketConnection *gorillaWebSocket.Conn, s
 	// If there is an error while marshalling the signed pre key from the client, return it
 	if protoMarshalErr != nil {
 		return protoMarshalErr
-	}
+	} // if protoMarshalErr
 	// Initialise an empty context with no values, no deadline, which will never be canceled
 	networkContext := context.Background()
-	// Create a hex representation of the IdentityKey of the client
-	clientIdentityKeyHex := hex.EncodeToString(signedPreKeyFromClient.IdentityKey)
 	// Store the SignedPreKey from the client
-	_, firestoreWriteDataErr := firestoreClient.Collection("clients").Doc(clientIdentityKeyHex).Set(networkContext, map[string]interface{}{
+	_, firestoreWriteDataErr := firestoreClient.Collection("clients").Doc(hex.EncodeToString(authenticatedIdentityPublicKeyClient)).Set(networkContext, map[string]interface{}{
 		"signedPreKey": base64.StdEncoding.EncodeToString(signedPreKeyFromClientProtobufBytes),
 	}, firestore.MergeAll) // _, firestoreWriteDataErr
 	if firestoreWriteDataErr != nil {
@@ -299,6 +302,8 @@ func getClientDataFromFirestore(identityPublicKeyHex string, firestoreClient *fi
 } // func getClientDataFromDatastore
 
 func deliverRequestedPreKeyBundle(websocketConnection *gorillaWebSocket.Conn, requestedPreKeyBundle []byte, firestoreClient *firestore.Client) error {
+	// Initialise an empty context with no values, no deadline, which will never be canceled
+	networkContext := context.Background()
 	// Create a string representation of the publicKey associated with the user in the preKeyBundle request
 	requestedPreKeyBundleString := hex.EncodeToString(requestedPreKeyBundle)
 	// Initialize an empty variable to hold the marshaled protobuf bytes of our response to the client
@@ -351,20 +356,40 @@ func deliverRequestedPreKeyBundle(websocketConnection *gorillaWebSocket.Conn, re
 		} // if protoUnmarshalErr != nil
 	} // if singleUserSignedPreKeyBase64, exists
 	// If OneTimePreKeys which match the client request exist in our backend storage
-	if singleUserOneTimePreKeys, ok := multiUserOneTimePreKeys[requestedPreKeyBundleString]; ok {
-		// Create a variable to temporarily store a single OneTimePreKey
-		var singleUserOneTimePreKey []byte
-		// Take the first OneTimePreKey from the slice
-		for _, singleUserOneTimePreKey = range singleUserOneTimePreKeys {
-			// Break out from the for loop after taking the first OneTimePreKey from the slice
-			break
-		} // for _, singleUserOneTimePreKey
-		if protoUnmarshalErr := golangProto.Unmarshal(singleUserOneTimePreKey, messageToClientProtobuf.Response.PreKeyBundle.OneTimePreKey); protoUnmarshalErr != nil {
-			// Fill in the error field in the message to client with the error that occured
-			messageToClientProtobuf.Error = protoUnmarshalErr.Error()
-		} // if protoUnmarshalErr
-	} // if singleUserOneTimePreKeys, ok
 
+	// @TODO check if the amount of oneTimePreKeys is sufficient
+	// If OneTimePreKeys which match the client request exist in our backend storage
+	if singleUserOneTimePreKeys, exists := clientDataMap["oneTimePreKeys"]; exists {
+		// Cast the whole interface{} into a map[string]interface{} as per data firestore spec
+		singleUserOneTimePreKeysMap := singleUserOneTimePreKeys.(map[string]interface{})
+		// As long as we have at least one oneTimePreKey
+		for _, singleUserOneTimePreKeyBase64 := range singleUserOneTimePreKeysMap {
+			// Base64 decode the it to get the protobuf bytes
+			singleUserOneTimePreKey, singleUserOneTimePreKeyErr := base64.StdEncoding.DecodeString(singleUserOneTimePreKeyBase64.(string))
+			// If there is an error with the base64 decoding, fill in the error field in the message to client with the error that occured
+			if singleUserOneTimePreKeyErr != nil {
+				messageToClientProtobuf.Error = singleUserOneTimePreKeyErr.Error()
+			} // if singleUserProfileErr
+			// Unmarshal it into our PreKeyBundle structure
+			if protoUnmarshalErr := golangProto.Unmarshal(singleUserOneTimePreKey, messageToClientProtobuf.Response.PreKeyBundle.OneTimePreKey); protoUnmarshalErr != nil {
+				// Fill in the error field in the message to client with the error that occured
+				messageToClientProtobuf.Error = protoUnmarshalErr.Error()
+			} // if protoUnmarshalErr != nil
+			// Delete the oneTimePreKey that was used
+			_, firestoreWriteDataErr := firestoreClient.Collection("clients").Doc(requestedPreKeyBundleString).Update(networkContext, []firestore.Update{
+				{
+					// This is how we access a nested field in order to delete it specifically without deleting the other keys
+					Path:  "oneTimePreKeys." + fmt.Sprint(messageToClientProtobuf.Response.PreKeyBundle.OneTimePreKey.TimeStamp),
+					Value: firestore.Delete,
+				}, // []firestore.Update
+			}) // _, firestoreWriteDataErr
+			if firestoreWriteDataErr != nil {
+				return firestoreWriteDataErr
+			} // if firestoreWriteDataErr != nil
+			// Break out of the for loop on purpose after consuming a single oneTimePreKey
+			break
+		} // for singleUserOneTimePreKeyIndex, singleUserOneTimePreKey
+	} // if singleUserSignedPreKeyBase64, exists
 	// Use protobufs to marshal our message structure so that we can send it over the websocket connection
 	messageToClientProtobufBytes, messageToClientProtobufErr = golangProto.Marshal(&messageToClientProtobuf)
 	// If there is an error while trying to perform protobuf marshaling
