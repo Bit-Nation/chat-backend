@@ -6,7 +6,6 @@
   name = "github.com/Bit-Nation/panthalassa"
   packages = [
     "bip32",
-    "chat/prekey",
     "crypto/aes",
     "crypto/scrypt",
     "keyManager",
@@ -20,7 +19,7 @@
     "mnemonic",
     "profile"
   ]
-  revision = "e260155093316d9964778e667bf4da4d9cbbb5d6"
+  revision = "2337c6749cafb402fce8709e20dc2712d196375a"
 
 [[projects]]
   branch = "master"
@@ -60,7 +59,7 @@
   branch = "master"
   name = "github.com/btcsuite/btcd"
   packages = ["btcec"]
-  revision = "9a2f9524024889e129a5422aca2cff73cb3eabf6"
+  revision = "f5e261fc9ec3437697fb31d8b38453c293204b29"
 
 [[projects]]
   name = "github.com/davecgh/go-spew"
@@ -188,6 +187,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "2cacf0d6205970bed5b8e9284f8148b036629dcdd1aaf4b8215b5c0c9b5f28cb"
+  inputs-digest = "6025d8b6ee1b216050da58104183ad0eca79d378e05184a8aa89ea6c51eb78f1"
   solver-name = "gps-cdcl"
   solver-version = 1
