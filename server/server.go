@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 
+	firestore "cloud.google.com/go/firestore"
 	firebase "firebase.google.com/go"
 	backendProtobuf "github.com/Bit-Nation/protobuffers"
 	golangProto "github.com/golang/protobuf/proto"
@@ -76,18 +77,24 @@ func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 		websocketConnection.Close()
 		return
 	} // if websocketConnectionRequestAuthErr != nil
-
+	// Create a new connection to the firestore storage service
+	firestoreClient, firestoreClientErr := newFirestoreConnection("panthalassa-chat-private.json")
+	// If there is an error establishing the connection to the firestore, close the websocket connection
+	if firestoreClientErr != nil {
+		websocketConnection.Close()
+		return
+	} // if firestoreClientErr != nil
 	// Check if there are pending messages to be delivered when the client comes back online
 	if messagesToBeDelivered, ok := multiUserChatMessage[hex.EncodeToString(authenticatedIdentityPublicKeyClient)]; ok {
 		deliverMessages(websocketConnection, messagesToBeDelivered)
 	} // if messagesToBeDelivered
 
 	// Try to process a message from the client
-	websocketConnectionProcessMessageErr := processMessage(websocketConnection, authenticatedIdentityPublicKeyClient)
+	websocketConnectionProcessMessageErr := processMessage(websocketConnection, authenticatedIdentityPublicKeyClient, firestoreClient)
 	// For as long as we don't enounter an error while processing messages from the client
 	for websocketConnectionProcessMessageErr == nil {
 		// Process messages from the client
-		websocketConnectionProcessMessageErr = processMessage(websocketConnection, authenticatedIdentityPublicKeyClient)
+		websocketConnectionProcessMessageErr = processMessage(websocketConnection, authenticatedIdentityPublicKeyClient, firestoreClient)
 	} // for websocketConnectionProcessMessageErr == nil
 	// Once we enounter an error while processing messages from the client
 	// Log the error we encountered
@@ -124,7 +131,7 @@ func sendErrorToClient(encounteredError error, websocketConnection *gorillaWebSo
 	return nil
 } // func sendErrorToClient
 
-func processMessage(websocketConnection *gorillaWebSocket.Conn, authenticatedIdentityPublicKeyClient []byte) error {
+func processMessage(websocketConnection *gorillaWebSocket.Conn, authenticatedIdentityPublicKeyClient []byte, firestoreClient *firestore.Client) error {
 	// Initialize an empty variable to hold the protobuf message
 	var messageFromClientProtobuf backendProtobuf.BackendMessage
 	// Read a message from a client over the websocket connection
@@ -158,7 +165,7 @@ func processMessage(websocketConnection *gorillaWebSocket.Conn, authenticatedIde
 		case messageFromClientProtobuf.Request.NewOneTimePreKeys != 0:
 			return errors.New("Only backend is allowed to request NewOneTimePreKeys")
 		case messageFromClientProtobuf.Request.PreKeyBundle != nil:
-			return deliverRequestedPreKeyBundle(websocketConnection, messageFromClientProtobuf.Request.PreKeyBundle)
+			return deliverRequestedPreKeyBundle(websocketConnection, messageFromClientProtobuf.Request.PreKeyBundle, firestoreClient)
 		case messageFromClientProtobuf.Request.Auth != nil:
 			return errors.New("Backend should request authentication, not the client")
 		} // Inner switch {
@@ -254,25 +261,30 @@ func handleMessageFromClient(websocketConnection *gorillaWebSocket.Conn, message
 	return nil
 } // func handleMessageFromClient
 
-func getClientDataFromDatastore(identityPublicKeyHex string) (map[string]interface{}, error) {
+func newFirestoreConnection(credentialsFile string) (*firestore.Client, error) {
 	// Initialise an empty context with no values, no deadline, which will never be canceled
 	networkContext := context.Background()
-	// Initialise the options required by the firebase app
-	clientOptions := option.WithCredentialsFile("panthalassa-chat-private.json")
-	// Initialise a new firebase application
+	// Initialise the options required by the firebase app, in this case the credentials file
+	clientOptions := option.WithCredentialsFile(credentialsFile)
+	// Initialise a new firebase application using the context and the clientOptions
 	firebaseApp, firebaseAppErr := firebase.NewApp(networkContext, nil, clientOptions)
 	if firebaseAppErr != nil {
 		return nil, firebaseAppErr
 	} // if firebaseAppErr != nil
 	// Initialise the firestore
-	firestore, firestoreError := firebaseApp.Firestore(networkContext)
+	firestoreClient, firestoreError := firebaseApp.Firestore(networkContext)
 	if firestoreError != nil {
 		return nil, firestoreError
 	} // if firestoreError != nil
 	// Make sure to close the firestore once the function returns
-	defer firestore.Close()
+	return firestoreClient, nil
+} // func newFirestoreConnection
+
+func getClientDataFromFirestore(identityPublicKeyHex string, firestoreClient *firestore.Client) (map[string]interface{}, error) {
+	// Initialise an empty context with no values, no deadline, which will never be canceled
+	networkContext := context.Background()
 	// Get a snapshot of the document that contains the data we are interested in
-	documentSnapshot, documentSnapshotErr := firestore.Collection("clients").Doc(identityPublicKeyHex).Get(networkContext)
+	documentSnapshot, documentSnapshotErr := firestoreClient.Collection("clients").Doc(identityPublicKeyHex).Get(networkContext)
 	if documentSnapshotErr != nil {
 		return nil, documentSnapshotErr
 	} // if documentSnapshotErr != nil
@@ -281,7 +293,7 @@ func getClientDataFromDatastore(identityPublicKeyHex string) (map[string]interfa
 	return documentDataMap, nil
 } // func getClientDataFromDatastore
 
-func deliverRequestedPreKeyBundle(websocketConnection *gorillaWebSocket.Conn, requestedPreKeyBundle []byte) error {
+func deliverRequestedPreKeyBundle(websocketConnection *gorillaWebSocket.Conn, requestedPreKeyBundle []byte, firestoreClient *firestore.Client) error {
 	// Create a string representation of the publicKey associated with the user in the preKeyBundle request
 	requestedPreKeyBundleString := hex.EncodeToString(requestedPreKeyBundle)
 	// Initialize an empty variable to hold the marshaled protobuf bytes of our response to the client
@@ -301,7 +313,7 @@ func deliverRequestedPreKeyBundle(websocketConnection *gorillaWebSocket.Conn, re
 	// Initialize an empty PreKey structure which would hold the requested OneTimePreKey if it exists
 	messageToClientProtobuf.Response.PreKeyBundle.OneTimePreKey = &backendProtobuf.PreKey{}
 	// If a Profile which matches the client request exists in our backend storage
-	clientDataMap, clientDataMapErr := getClientDataFromDatastore(requestedPreKeyBundleString)
+	clientDataMap, clientDataMapErr := getClientDataFromFirestore(requestedPreKeyBundleString, firestoreClient)
 	// If there is an error obtaining the client data from the datastore, fill in the error field in the message to client with the error that occured
 	if clientDataMapErr != nil {
 		messageToClientProtobuf.Error = clientDataMapErr.Error()
