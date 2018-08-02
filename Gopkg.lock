@@ -3,6 +3,7 @@
 
 [[projects]]
   branch = "system_update"
+  digest = "1:59755a749987fdb0b5bc657c3ce18e05873c87999bfded289d227f66d30671a7"
   name = "github.com/Bit-Nation/panthalassa"
   packages = [
     "bip32",
@@ -17,57 +18,73 @@
     "keyStore/migration/identity",
     "keyStore/migration/identity/ed25519",
     "mnemonic",
-    "profile"
+    "profile",
   ]
+  pruneopts = "UT"
   revision = "2337c6749cafb402fce8709e20dc2712d196375a"
 
 [[projects]]
   branch = "master"
+  digest = "1:405ebac7c7c7c69ce915be2cc8cbcc34dded88e6c73cbb29c8dc3b584ac5882c"
   name = "github.com/Bit-Nation/protobuffers"
   packages = ["."]
+  pruneopts = "UT"
   revision = "89156fe5570c8c3b700e25db4dd50267bcf5eeb0"
 
 [[projects]]
   branch = "master"
+  digest = "1:46c7e43b9cade282cd7c78aafb7ca3be4f33c56020129f18cf02cf87df4609fa"
   name = "github.com/Bit-Nation/x3dh"
   packages = ["."]
+  pruneopts = "UT"
   revision = "f0fcdf8e34bf27e17bede582af1f5652648c4107"
 
 [[projects]]
   branch = "master"
+  digest = "1:696c8d2d1fcd5d13bf58203593fc640b70917a7b9871741878efe86db55ec830"
   name = "github.com/FactomProject/basen"
   packages = ["."]
+  pruneopts = "UT"
   revision = "fe3947df716ebfda9847eb1b9a48f9592e06478c"
 
 [[projects]]
   branch = "master"
+  digest = "1:7e37fe0e25f70f38f090697a2850fbb53b6ac8051a29ff202d8a89a09292f55a"
   name = "github.com/FactomProject/btcutilecc"
   packages = ["."]
+  pruneopts = "UT"
   revision = "d3a63a5752ecf3fbc06bd97365da752111c263df"
 
 [[projects]]
   branch = "master"
+  digest = "1:4cf11742b199ab3aacf26b00187e72f7ff8ba2145f363b74f295d54f098f79e4"
   name = "github.com/agl/ed25519"
   packages = [
     ".",
     "edwards25519",
-    "extra25519"
+    "extra25519",
   ]
+  pruneopts = "UT"
   revision = "5312a61534124124185d41f09206b9fef1d88403"
 
 [[projects]]
   branch = "master"
+  digest = "1:2c00f064ba355903866cbfbf3f7f4c0fe64af6638cc7d1b8bdcf3181bc67f1d8"
   name = "github.com/btcsuite/btcd"
   packages = ["btcec"]
+  pruneopts = "UT"
   revision = "f5e261fc9ec3437697fb31d8b38453c293204b29"
 
 [[projects]]
+  digest = "1:a2c1d0e43bd3baaa071d1b9ed72c27d78169b2b269f71c105ac4ba34b1be4a39"
   name = "github.com/davecgh/go-spew"
   packages = ["spew"]
+  pruneopts = "UT"
   revision = "346938d642f2ec3594ed81d874461961cd0faa76"
   version = "v1.1.0"
 
 [[projects]]
+  digest = "1:b2f36e5422bda96da299f9e48c7dcdd3177b18477297f84ff1a45ec3032c2994"
   name = "github.com/ethereum/go-ethereum"
   packages = [
     "common",
@@ -76,101 +93,131 @@
     "crypto",
     "crypto/secp256k1",
     "crypto/sha3",
-    "rlp"
+    "rlp",
   ]
+  pruneopts = "T"
   revision = "225171a4bfcc16bd12a1906b1e0d43d0b18c353b"
   version = "v1.8.13"
 
 [[projects]]
+  digest = "1:bbadccf3d3317ea03c0dac0b45b673b4b397c8f91a1d2eff550a3c51c4ad770e"
   name = "github.com/gogo/protobuf"
   packages = ["proto"]
+  pruneopts = "UT"
   revision = "636bf0302bc95575d69441b25a2603156ffdddf1"
   version = "v1.1.1"
 
 [[projects]]
+  digest = "1:15042ad3498153684d09f393bbaec6b216c8eec6d61f63dff711de7d64ed8861"
   name = "github.com/golang/protobuf"
   packages = ["proto"]
+  pruneopts = "UT"
   revision = "b4deda0973fb4c70b50d226b1af49f3da59f5265"
   version = "v1.1.0"
 
 [[projects]]
+  digest = "1:c79fb010be38a59d657c48c6ba1d003a8aa651fa56b579d959d74573b7dff8e1"
   name = "github.com/gorilla/context"
   packages = ["."]
+  pruneopts = "UT"
   revision = "08b5f424b9271eedf6f9f0ce86cb9396ed337a42"
   version = "v1.1.1"
 
 [[projects]]
+  digest = "1:e73f5b0152105f18bc131fba127d9949305c8693f8a762588a82a48f61756f5f"
   name = "github.com/gorilla/mux"
   packages = ["."]
+  pruneopts = "UT"
   revision = "e3702bed27f0d39777b0b37b664b6280e8ef8fbf"
   version = "v1.6.2"
 
 [[projects]]
+  digest = "1:43dd08a10854b2056e615d1b1d22ac94559d822e1f8b6fcc92c1a1057e85188e"
   name = "github.com/gorilla/websocket"
   packages = ["."]
+  pruneopts = "UT"
   revision = "ea4d1f681babbce9545c9c5f3d5194a789c89f5b"
   version = "v1.2.0"
 
 [[projects]]
+  digest = "1:fa3a7dc0a780fb19838fb96d4e18c0b9a019d9bb618798308d7b6ca48fcb9876"
   name = "github.com/jbenet/go-base58"
   packages = ["."]
+  pruneopts = "UT"
   revision = "6237cf65f3a6f7111cd8a42be3590df99a66bc7d"
   version = "1.0.0"
 
 [[projects]]
   branch = "master"
+  digest = "1:f2fda8f605afe8a7269a5299fbe7a42e55f7b70c3a5a69c6d61e5b78744e771e"
   name = "github.com/libp2p/go-libp2p-crypto"
   packages = [
     ".",
-    "pb"
+    "pb",
   ]
+  pruneopts = "UT"
   revision = "773c9eda74a1e905d4eab537487348e2cc4d0bb6"
 
 [[projects]]
   branch = "master"
+  digest = "1:17e048d1af8833670439d1ad0c92305fc1ad503e5d03f37ee667c0074df0fd03"
   name = "github.com/minio/sha256-simd"
   packages = ["."]
+  pruneopts = "UT"
   revision = "ad98a36ba0da87206e3378c556abbfeaeaa98668"
 
 [[projects]]
+  digest = "1:e252490b4a2ac4ca07ef1bd6b5d3b4c025f35486afe16e8549360ff023ac0627"
   name = "github.com/multiformats/go-multihash"
   packages = ["."]
+  pruneopts = "UT"
   revision = "0e514edc5c8bbb858ed49a0a38a456d9bd0b2644"
   version = "v0.1.0"
 
 [[projects]]
+  digest = "1:0028cb19b2e4c3112225cd871870f2d9cf49b9b4276531f03438a88e94be86fe"
   name = "github.com/pmezard/go-difflib"
   packages = ["difflib"]
+  pruneopts = "UT"
   revision = "792786c7400a136282c1664665ae0a8db921c6c2"
   version = "v1.0.0"
 
 [[projects]]
+  digest = "1:c40d65817cdd41fac9aa7af8bed56927bb2d6d47e4fea566a74880f5c2b1c41e"
   name = "github.com/stretchr/testify"
   packages = [
     "assert",
-    "require"
+    "require",
   ]
+  pruneopts = "UT"
   revision = "f35b8ab0b5a2cef36673838d662e249dd9c94686"
   version = "v1.2.2"
 
 [[projects]]
   branch = "master"
+  digest = "1:78b4a1982977995f679dfb58d71c8f3f100e09e478cde4509af543dab7182527"
   name = "github.com/tiabc/doubleratchet"
   packages = ["."]
+  pruneopts = "UT"
   revision = "9d7f37c630e2bf368f380032c57186efe4230bbe"
 
 [[projects]]
+  digest = "1:ec528a786fa75556deed44de7118a74ced456360e782786a20aed292a03955a5"
   name = "github.com/tyler-smith/go-bip32"
   packages = ["."]
+  pruneopts = "UT"
   revision = "2c9cfd17756470a0b7c3e4b7954bae7d11035504"
 
 [[projects]]
+  digest = "1:77bfdc496dcb1935fd27c553e6fada8346c40d493ce0d5ffddfcb4f45f1192cc"
   name = "github.com/tyler-smith/go-bip39"
   packages = ["."]
+  pruneopts = "UT"
   revision = "8e7a99b3e716f36d3b080a9a70f9eb45abe4edcc"
 
 [[projects]]
   branch = "master"
+  digest = "1:77bdb981f0416d43dbd2c0f196276bf0be540b49e6757734f9f278efeaeec5c2"
   name = "golang.org/x/crypto"
   packages = [
     "curve25519",
@@ -180,13 +227,27 @@
     "pbkdf2",
     "ripemd160",
     "scrypt",
-    "sha3"
+    "sha3",
   ]
+  pruneopts = "UT"
   revision = "c126467f60eb25f8f27e5a981f32a87e3965053f"
 
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "6025d8b6ee1b216050da58104183ad0eca79d378e05184a8aa89ea6c51eb78f1"
+  input-imports = [
+    "github.com/Bit-Nation/panthalassa/keyManager",
+    "github.com/Bit-Nation/panthalassa/keyStore",
+    "github.com/Bit-Nation/panthalassa/mnemonic",
+    "github.com/Bit-Nation/panthalassa/profile",
+    "github.com/Bit-Nation/protobuffers",
+    "github.com/Bit-Nation/x3dh",
+    "github.com/golang/protobuf/proto",
+    "github.com/gorilla/mux",
+    "github.com/gorilla/websocket",
+    "github.com/stretchr/testify/require",
+    "github.com/tiabc/doubleratchet",
+    "golang.org/x/crypto/ed25519",
+  ]
   solver-name = "gps-cdcl"
   solver-version = 1

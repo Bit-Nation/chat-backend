@@ -2,18 +2,22 @@ package chatbackend
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
 
+	firebase "firebase.google.com/go"
 	backendProtobuf "github.com/Bit-Nation/protobuffers"
 	golangProto "github.com/golang/protobuf/proto"
 	gorillaMux "github.com/gorilla/mux"
 	gorillaWebSocket "github.com/gorilla/websocket"
 	cryptoEd25519 "golang.org/x/crypto/ed25519"
+	"google.golang.org/api/option"
 )
 
 // @TODO REPLACE WITH GOOGLE DATASTORE
@@ -25,7 +29,6 @@ var multiUserOneTimePreKeys = make(map[string][][]byte)
 
 // StartWebSocketServer starts the websocket server
 func StartWebSocketServer() {
-	multiUserProfileStore["22cfd1af5798544287cbf7721a0a4ebc2506d6f4df05413355a7f5cc86740724"] = []byte{10, 3, 66, 111, 98, 18, 5, 69, 97, 114, 116, 104, 26, 6, 98, 97, 115, 101, 54, 52, 34, 32, 34, 207, 209, 175, 87, 152, 84, 66, 135, 203, 247, 114, 26, 10, 78, 188, 37, 6, 214, 244, 223, 5, 65, 51, 85, 167, 245, 204, 134, 116, 7, 36, 42, 33, 2, 112, 86, 251, 69, 250, 221, 106, 218, 195, 167, 212, 229, 95, 13, 127, 156, 213, 63, 112, 93, 97, 163, 22, 140, 10, 129, 15, 99, 86, 187, 115, 196, 50, 32, 126, 223, 126, 93, 92, 179, 254, 62, 209, 108, 209, 75, 184, 251, 115, 230, 54, 254, 106, 11, 82, 61, 34, 47, 24, 11, 41, 186, 154, 145, 202, 97, 56, 180, 218, 177, 218, 5, 64, 2, 74, 64, 60, 237, 190, 135, 89, 152, 249, 49, 184, 64, 107, 107, 84, 70, 94, 195, 44, 202, 42, 211, 33, 168, 210, 185, 163, 120, 172, 234, 13, 50, 67, 143, 7, 255, 62, 69, 113, 89, 41, 83, 161, 146, 57, 13, 78, 196, 150, 249, 101, 59, 117, 129, 49, 137, 172, 66, 241, 104, 187, 41, 83, 129, 231, 3, 82, 65, 172, 68, 236, 179, 119, 160, 208, 100, 212, 101, 36, 155, 38, 5, 104, 222, 95, 90, 182, 38, 76, 55, 189, 139, 61, 253, 129, 97, 250, 254, 0, 139, 86, 225, 112, 3, 88, 56, 70, 147, 39, 54, 136, 131, 210, 183, 72, 11, 239, 64, 47, 168, 20, 11, 197, 204, 64, 166, 110, 184, 163, 152, 253, 7, 1}
 	// Create new gorillaRouter
 	gorillaRouter := gorillaMux.NewRouter()
 	// Bind an endpoint path to handleWebSocketConnection
@@ -251,6 +254,33 @@ func handleMessageFromClient(websocketConnection *gorillaWebSocket.Conn, message
 	return nil
 } // func handleMessageFromClient
 
+func getClientDataFromDatastore(identityPublicKeyHex string) (map[string]interface{}, error) {
+	// Initialise an empty context with no values, no deadline, which will never be canceled
+	networkContext := context.Background()
+	// Initialise the options required by the firebase app
+	clientOptions := option.WithCredentialsFile("panthalassa-chat-private.json")
+	// Initialise a new firebase application
+	firebaseApp, firebaseAppErr := firebase.NewApp(networkContext, nil, clientOptions)
+	if firebaseAppErr != nil {
+		return nil, firebaseAppErr
+	} // if firebaseAppErr != nil
+	// Initialise the firestore
+	firestore, firestoreError := firebaseApp.Firestore(networkContext)
+	if firestoreError != nil {
+		return nil, firestoreError
+	} // if firestoreError != nil
+	// Make sure to close the firestore once the function returns
+	defer firestore.Close()
+	// Get a snapshot of the document that contains the data we are interested in
+	documentSnapshot, documentSnapshotErr := firestore.Collection("clients").Doc(identityPublicKeyHex).Get(networkContext)
+	if documentSnapshotErr != nil {
+		return nil, documentSnapshotErr
+	} // if documentSnapshotErr != nil
+	// Retreive the data from the document snapshot into a map[string]interface{}
+	documentDataMap := documentSnapshot.Data()
+	return documentDataMap, nil
+} // func getClientDataFromDatastore
+
 func deliverRequestedPreKeyBundle(websocketConnection *gorillaWebSocket.Conn, requestedPreKeyBundle []byte) error {
 	// Create a string representation of the publicKey associated with the user in the preKeyBundle request
 	requestedPreKeyBundleString := hex.EncodeToString(requestedPreKeyBundle)
@@ -271,14 +301,25 @@ func deliverRequestedPreKeyBundle(websocketConnection *gorillaWebSocket.Conn, re
 	// Initialize an empty PreKey structure which would hold the requested OneTimePreKey if it exists
 	messageToClientProtobuf.Response.PreKeyBundle.OneTimePreKey = &backendProtobuf.PreKey{}
 	// If a Profile which matches the client request exists in our backend storage
-	if singleUserProfile, ok := multiUserProfileStore[requestedPreKeyBundleString]; ok {
+	clientDataMap, clientDataMapErr := getClientDataFromDatastore(requestedPreKeyBundleString)
+	// If there is an error obtaining the client data from the datastore, fill in the error field in the message to client with the error that occured
+	if clientDataMapErr != nil {
+		messageToClientProtobuf.Error = clientDataMapErr.Error()
+	} // if clientDataMapErr
+	// If the client data contains the profile of the client
+	if singleUserProfileBase64, exists := clientDataMap["profile"]; exists {
+		// Base64 decode the it to get the protobuf bytes
+		singleUserProfile, singleUserProfileErr := base64.StdEncoding.DecodeString(singleUserProfileBase64.(string))
+		// If there is an error with the base64 decoding, fill in the error field in the message to client with the error that occured
+		if singleUserProfileErr != nil {
+			messageToClientProtobuf.Error = singleUserProfileErr.Error()
+		} // if singleUserProfileErr
 		// Unmarshal it into our PreKeyBundle structure
 		if protoUnmarshalErr := golangProto.Unmarshal(singleUserProfile, messageToClientProtobuf.Response.PreKeyBundle.Profile); protoUnmarshalErr != nil {
 			// If there is an error with the unmarshalling, fill in the error field in the message to client with the error that occured
 			messageToClientProtobuf.Error = protoUnmarshalErr.Error()
 		} // if protoUnmarshalErr
 	} // if singleUserProfile, ok
-
 	// If a SignedPreKey which matches the client request exists in our backend storage
 	if singleUserSignedPreKey, ok := multiUserSignedPreKeyStore[requestedPreKeyBundleString]; ok {
 		// Unmarshal it into our SignedPreKey structure
