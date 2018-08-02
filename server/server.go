@@ -17,7 +17,7 @@ import (
 	gorillaMux "github.com/gorilla/mux"
 	gorillaWebSocket "github.com/gorilla/websocket"
 	cryptoEd25519 "golang.org/x/crypto/ed25519"
-	"google.golang.org/api/option"
+	option "google.golang.org/api/option"
 )
 
 // @TODO REPLACE WITH GOOGLE DATASTORE
