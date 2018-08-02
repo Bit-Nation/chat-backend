@@ -21,10 +21,6 @@ import (
 	option "google.golang.org/api/option"
 )
 
-// @TODO REPLACE WITH GOOGLE DATASTORE
-// Proof of concept backend storage
-var multiUserChatMessage = make(map[string][][]byte)
-
 // StartWebSocketServer starts the websocket server
 func StartWebSocketServer() {
 	// Create new gorillaRouter
@@ -81,10 +77,52 @@ func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 		websocketConnection.Close()
 		return
 	} // if firestoreClientErr != nil
-	// Check if there are pending messages to be delivered when the client comes back online
-	if messagesToBeDelivered, ok := multiUserChatMessage[hex.EncodeToString(authenticatedIdentityPublicKeyClient)]; ok {
+	// @TODO maybe pass the clientDataMap as an object to avoid unnecesary transactions
+	// Get the authenticated client data
+	clientDataMap, clientDataMapErr := getClientDataFromFirestore(hex.EncodeToString(authenticatedIdentityPublicKeyClient), firestoreClient)
+	if clientDataMapErr != nil {
+		// Don't handle the error here as we are handling it on other places
+		log.Println(clientDataMapErr)
+	}
+	// Initialise an empty context with no values, no deadline, which will never be canceled
+	networkContext := context.Background()
+	// Initialize a [][]byte to store all of the undelivered messages if any
+	var messagesToBeDelivered [][]byte
+	if singleUserChatMessages, exists := clientDataMap["chatMessages"]; exists {
+		// Cast the whole interface{} into a map[string]interface{} as per data firestore spec
+		singleUserChatMessagesMap := singleUserChatMessages.(map[string]interface{})
+		// As long as we have at least one oneTimePreKey
+		for _, singleUserChatMessageBase64 := range singleUserChatMessagesMap {
+			// Initialise a chatMessage object so we can unmarshal the bytes into it and use the messageID
+			// Base64 decode the it to get the protobuf bytes
+			singleUserChatMessage, singleUserChatMessageErr := base64.StdEncoding.DecodeString(singleUserChatMessageBase64.(string))
+			// If there is an error with the base64 decoding, fill in the error field in the message to client with the error that occured
+			if singleUserChatMessageErr != nil {
+				if writeMessageErr := sendErrorToClient(singleUserChatMessageErr, websocketConnection); writeMessageErr != nil {
+					log.Println("Error while sending an error to the client:", writeMessageErr)
+				} // if writeMessageErr
+			} // if singleUserProfileErr
+			// Delete the oneTimePreKey that was used
+			_, firestoreWriteDataErr := firestoreClient.Collection("clients").Doc(hex.EncodeToString(authenticatedIdentityPublicKeyClient)).Update(networkContext, []firestore.Update{
+				{
+					// This is how we access a nested field in order to delete it specifically without deleting the other keys
+					Path:  "chatMessages." + "@TODO",
+					Value: firestore.Delete,
+				}, // []firestore.Update
+			}) // _, firestoreWriteDataErr
+			if firestoreWriteDataErr != nil {
+				if writeMessageErr := sendErrorToClient(firestoreWriteDataErr, websocketConnection); writeMessageErr != nil {
+					log.Println("Error while sending an error to the client:", writeMessageErr)
+				} // if writeMessageErr
+			} // if firestoreWriteDataErr != nil
+			// Break out of the for loop on purpose after consuming a single oneTimePreKey
+			messagesToBeDelivered = append(messagesToBeDelivered, singleUserChatMessage)
+		} // for singleUserOneTimePreKeyIndex, singleUserOneTimePreKey
+	} // if singleUserSignedPreKeyBase64, exists
+
+	if len(messagesToBeDelivered) > 0 {
 		deliverMessages(websocketConnection, messagesToBeDelivered)
-	} // if messagesToBeDelivered
+	} // if len(messagesToBeDelivered > 0)
 
 	// Try to process a message from the client
 	websocketConnectionProcessMessageErr := processMessage(websocketConnection, authenticatedIdentityPublicKeyClient, firestoreClient)
@@ -155,7 +193,7 @@ func processMessage(websocketConnection *gorillaWebSocket.Conn, authenticatedIde
 		// Inner switch in case we have a Request from client, cases are valid if they are true
 		switch {
 		case messageFromClientProtobuf.Request.Messages != nil:
-			return handleMessageFromClient(websocketConnection, messageFromClientProtobuf.Request.Messages)
+			return handleMessageFromClient(websocketConnection, messageFromClientProtobuf.Request.Messages, firestoreClient)
 		// @TODO wait for @Gross input on message states
 		case messageFromClientProtobuf.Request.MessageStateChange != nil:
 			fmt.Println(messageFromClientProtobuf.Request.MessageStateChange, "MessageStateChange")
@@ -247,7 +285,9 @@ func persistSignedPreKeyFromClient(websocketConnection *gorillaWebSocket.Conn, s
 	return nil
 } // func persistSignedPreKeyFromClient
 
-func handleMessageFromClient(websocketConnection *gorillaWebSocket.Conn, messagesFromClient []*backendProtobuf.ChatMessage) error {
+func handleMessageFromClient(websocketConnection *gorillaWebSocket.Conn, messagesFromClient []*backendProtobuf.ChatMessage, firestoreClient *firestore.Client) error {
+	// Initialise an empty context with no values, no deadline, which will never be canceled
+	networkContext := context.Background()
 	// For each message received from client
 	for _, singleMessageFromClient := range messagesFromClient {
 		// Use protobuf to marshal the message into bytes so that we can store it easily
@@ -256,11 +296,17 @@ func handleMessageFromClient(websocketConnection *gorillaWebSocket.Conn, message
 		if chatMessageProtobufError != nil {
 			return chatMessageProtobufError
 		} // if chatMessageProtobufError != nil
-		// Convert the identityPublicKey of the intented recipient of the message into a string so that it's easier to use
-		messageReceiverString := hex.EncodeToString(singleMessageFromClient.Receiver)
-		// Use the string representation of the identityPublicKey as part of our backend storage
-		multiUserChatMessage[messageReceiverString] = append(multiUserChatMessage[messageReceiverString], chatMessageProtobufBytes)
+		// Store the message from the client
+		_, firestoreWriteDataErr := firestoreClient.Collection("clients").Doc(hex.EncodeToString(singleMessageFromClient.Receiver)).Set(networkContext, map[string]interface{}{
+			"chatMessages": map[string]interface{}{
+				string(singleMessageFromClient.MessageID): base64.StdEncoding.EncodeToString(chatMessageProtobufBytes),
+			},
+		}, firestore.MergeAll)
+		if firestoreWriteDataErr != nil {
+			return firestoreWriteDataErr
+		} // if firestoreWriteDataErr != nil
 		// Echo back the same message we received from the client back to him so that we inform him that the message has been persisted
+
 		if writeMessageError := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, chatMessageProtobufBytes); writeMessageError != nil {
 			// If there is an error while sending a message to a client
 			return writeMessageError
@@ -322,7 +368,7 @@ func deliverRequestedPreKeyBundle(websocketConnection *gorillaWebSocket.Conn, re
 	messageToClientProtobuf.Response.PreKeyBundle.SignedPreKey = &backendProtobuf.PreKey{}
 	// Initialize an empty PreKey structure which would hold the requested OneTimePreKey if it exists
 	messageToClientProtobuf.Response.PreKeyBundle.OneTimePreKey = &backendProtobuf.PreKey{}
-	// If a Profile which matches the client request exists in our backend storage
+	// Get the client data corresponding to the request
 	clientDataMap, clientDataMapErr := getClientDataFromFirestore(requestedPreKeyBundleString, firestoreClient)
 	// If there is an error obtaining the client data from the datastore, fill in the error field in the message to client with the error that occured
 	if clientDataMapErr != nil {
