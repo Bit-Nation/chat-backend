@@ -91,7 +91,7 @@ func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 	if singleUserChatMessages, exists := clientDataMap["chatMessages"]; exists {
 		// Cast the whole interface{} into a map[string]interface{} as per data firestore spec
 		singleUserChatMessagesMap := singleUserChatMessages.(map[string]interface{})
-		// As long as we have at least one oneTimePreKey
+		// As long as we have at least one chatMessage
 		for _, singleUserChatMessageBase64 := range singleUserChatMessagesMap {
 			// Initialise a chatMessage object so we can unmarshal the bytes into it and use the messageID
 			// Base64 decode the it to get the protobuf bytes
