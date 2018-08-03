@@ -18,7 +18,6 @@ import (
 	gorillaMux "github.com/gorilla/mux"
 	gorillaWebSocket "github.com/gorilla/websocket"
 	cryptoEd25519 "golang.org/x/crypto/ed25519"
-	option "google.golang.org/api/option"
 )
 
 // StartWebSocketServer starts the websocket server
@@ -71,7 +70,7 @@ func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 		return
 	} // if websocketConnectionRequestAuthErr != nil
 	// Create a new connection to the firestore storage service
-	firestoreClient, firestoreClientErr := newFirestoreConnection("panthalassa-chat-private.json")
+	firestoreClient, firestoreClientErr := newFirestoreConnection()
 	// If there is an error establishing the connection to the firestore, close the websocket connection
 	if firestoreClientErr != nil {
 		websocketConnection.Close()
@@ -115,12 +114,13 @@ func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 					log.Println("Error while sending an error to the client:", writeMessageErr)
 				} // if writeMessageErr
 			} // if firestoreWriteDataErr != nil
-			// Break out of the for loop on purpose after consuming a single oneTimePreKey
+			// Append each message to the [][]byte slice
 			messagesToBeDelivered = append(messagesToBeDelivered, singleUserChatMessage)
 		} // for singleUserOneTimePreKeyIndex, singleUserOneTimePreKey
 	} // if singleUserSignedPreKeyBase64, exists
 
 	if len(messagesToBeDelivered) > 0 {
+		// @TODO CHECK IF MESSAGE WAS DELIVERED FIRST BEFORE DELEtiNG IT FROM BACKEND
 		deliverMessages(websocketConnection, messagesToBeDelivered)
 	} // if len(messagesToBeDelivered > 0)
 
@@ -315,13 +315,11 @@ func handleMessageFromClient(websocketConnection *gorillaWebSocket.Conn, message
 	return nil
 } // func handleMessageFromClient
 
-func newFirestoreConnection(credentialsFile string) (*firestore.Client, error) {
+func newFirestoreConnection() (*firestore.Client, error) {
 	// Initialise an empty context with no values, no deadline, which will never be canceled
 	networkContext := context.Background()
-	// Initialise the options required by the firebase app, in this case the credentials file
-	clientOptions := option.WithCredentialsFile(credentialsFile)
-	// Initialise a new firebase application using the context and the clientOptions
-	firebaseApp, firebaseAppErr := firebase.NewApp(networkContext, nil, clientOptions)
+	// Initialise a new firebase application using the context
+	firebaseApp, firebaseAppErr := firebase.NewApp(networkContext, nil)
 	if firebaseAppErr != nil {
 		return nil, firebaseAppErr
 	} // if firebaseAppErr != nil
