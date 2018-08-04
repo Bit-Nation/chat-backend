@@ -20,6 +20,26 @@ import (
 	cryptoEd25519 "golang.org/x/crypto/ed25519"
 )
 
+// Use interface for storage to make it easily swappable
+type storageInterface interface {
+	persistChatMessagesFromClient([]*backendProtobuf.ChatMessage) error
+	persistOneTimePreKeysFromClient([]*backendProtobuf.PreKey) error
+	persistSignedPreKeyFromClient(*backendProtobuf.PreKey) error
+	deleteFieldFromStorage(string, string) error
+	getClientDataFromStorage() (*authenticatedClientFirestore, error)
+}
+
+type authenticatedClientFirestore struct {
+	authenticatedIdentityPublicKeyHex string
+	firestoreConnection               *firestore.Client
+	websocketConnection               *gorillaWebSocket.Conn
+	encounteredError                  error
+	messagesToBeDelivered             [][]byte
+	oneTimePreKeys                    [][]byte
+	signedPreKey                      []byte
+	profile                           []byte
+}
+
 // StartWebSocketServer starts the websocket server
 func StartWebSocketServer() {
 	// Create new gorillaRouter
@@ -53,6 +73,10 @@ func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 		websocketConnection.Close()
 		return
 	}
+	// Initialise the authenticatedClientFirestore object
+	authenticatedClient := authenticatedClientFirestore{}
+	// Set the websocketConnection so that we can send an error back to the client in case auth fails
+	authenticatedClient.websocketConnection = websocketConnection
 	// Require successful authentication before allowing a client to send a message
 	authenticatedIdentityPublicKeyClient, websocketConnectionRequestAuthErr := requestAuth(websocketConnection)
 	// If the authentication failed,
@@ -61,7 +85,7 @@ func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 		log.Println("Authentication Failed:", websocketConnectionRequestAuthErr)
 		// In case there was a protobuf marshal error, The client would receive an empty []byte and should handle it as an invalid response
 		// Even with an invalid response, the client should still take the hint that his authentication attempt has failed
-		if writeMessageErr := sendErrorToClient(websocketConnectionRequestAuthErr, websocketConnection); writeMessageErr != nil {
+		if writeMessageErr := authenticatedClient.sendErrorToClient(); writeMessageErr != nil {
 			log.Println("Error while sending an error to the client:", writeMessageErr)
 		} // if writeMessageErr
 		log.Println("Terminating websocket connection to client.")
@@ -69,83 +93,209 @@ func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 		websocketConnection.Close()
 		return
 	} // if websocketConnectionRequestAuthErr != nil
-	// Create a new connection to the firestore storage service
-	firestoreClient, firestoreClientErr := newFirestoreConnection()
-	// If there is an error establishing the connection to the firestore, close the websocket connection
-	if firestoreClientErr != nil {
-		websocketConnection.Close()
-		return
-	} // if firestoreClientErr != nil
-	// @TODO maybe pass the clientDataMap as an object to avoid unnecesary transactions
-	// Get the authenticated client data
-	clientDataMap, clientDataMapErr := getClientDataFromFirestore(hex.EncodeToString(authenticatedIdentityPublicKeyClient), firestoreClient)
-	if clientDataMapErr != nil {
-		// Don't handle the error here as we are handling it on other places
-		log.Println(clientDataMapErr)
-	}
-	// Initialise an empty context with no values, no deadline, which will never be canceled
-	networkContext := context.Background()
-	// Initialize a [][]byte to store all of the undelivered messages if any
-	var messagesToBeDelivered [][]byte
-	if singleUserChatMessages, exists := clientDataMap["chatMessages"]; exists {
-		// Cast the whole interface{} into a map[string]interface{} as per data firestore spec
-		singleUserChatMessagesMap := singleUserChatMessages.(map[string]interface{})
-		// As long as we have at least one chatMessage
-		for _, singleUserChatMessageBase64 := range singleUserChatMessagesMap {
-			// Initialise a chatMessage object so we can unmarshal the bytes into it and use the messageID
-			// Base64 decode the it to get the protobuf bytes
-			singleUserChatMessage, singleUserChatMessageErr := base64.StdEncoding.DecodeString(singleUserChatMessageBase64.(string))
-			// If there is an error with the base64 decoding, fill in the error field in the message to client with the error that occured
-			if singleUserChatMessageErr != nil {
-				if writeMessageErr := sendErrorToClient(singleUserChatMessageErr, websocketConnection); writeMessageErr != nil {
-					log.Println("Error while sending an error to the client:", writeMessageErr)
-				} // if writeMessageErr
-			} // if singleUserProfileErr
-			// Delete the oneTimePreKey that was used
-			_, firestoreWriteDataErr := firestoreClient.Collection("clients").Doc(hex.EncodeToString(authenticatedIdentityPublicKeyClient)).Update(networkContext, []firestore.Update{
-				{
-					// This is how we access a nested field in order to delete it specifically without deleting the other keys
-					Path:  "chatMessages." + "@TODO",
-					Value: firestore.Delete,
-				}, // []firestore.Update
-			}) // _, firestoreWriteDataErr
-			if firestoreWriteDataErr != nil {
-				if writeMessageErr := sendErrorToClient(firestoreWriteDataErr, websocketConnection); writeMessageErr != nil {
-					log.Println("Error while sending an error to the client:", writeMessageErr)
-				} // if writeMessageErr
-			} // if firestoreWriteDataErr != nil
-			// Append each message to the [][]byte slice
-			messagesToBeDelivered = append(messagesToBeDelivered, singleUserChatMessage)
-		} // for singleUserOneTimePreKeyIndex, singleUserOneTimePreKey
-	} // if singleUserSignedPreKeyBase64, exists
+	// Only set the authenticatedIdentityPublicKeyHex once authentication has been successful
+	authenticatedClient.authenticatedIdentityPublicKeyHex = hex.EncodeToString(authenticatedIdentityPublicKeyClient)
+	// Continue in the scope of the authenticatedWebsocketConnection to allow for easier testing
+	authenticatedWebsocketConnection(&authenticatedClient)
+} // func handleWebSocketConnection
 
-	if len(messagesToBeDelivered) > 0 {
-		// @TODO CHECK IF MESSAGE WAS DELIVERED FIRST BEFORE DELEtiNG IT FROM BACKEND
-		deliverMessages(websocketConnection, messagesToBeDelivered)
+func authenticatedWebsocketConnection(storage storageInterface) {
+	authenticatedClient, authenticatedClientErr := storage.getClientDataFromStorage()
+	if authenticatedClientErr != nil {
+		log.Println(authenticatedClientErr)
+	}
+	if len(authenticatedClient.messagesToBeDelivered) > 0 {
+		// If there are no errors while deliveing the messages to the client
+		if deliverMessagesErr := authenticatedClient.deliverMessages(authenticatedClient.messagesToBeDelivered); deliverMessagesErr == nil {
+			authenticatedClient.deleteFieldFromStorage("chatMessages", "")
+		} // if deliverMessagesErr == nil
 	} // if len(messagesToBeDelivered > 0)
 
 	// Try to process a message from the client
-	websocketConnectionProcessMessageErr := processMessage(websocketConnection, authenticatedIdentityPublicKeyClient, firestoreClient)
+	websocketConnectionProcessMessageErr := authenticatedClient.processMessage()
 	// For as long as we don't enounter an error while processing messages from the client
 	for websocketConnectionProcessMessageErr == nil {
 		// Process messages from the client
-		websocketConnectionProcessMessageErr = processMessage(websocketConnection, authenticatedIdentityPublicKeyClient, firestoreClient)
+		websocketConnectionProcessMessageErr = authenticatedClient.processMessage()
 	} // for websocketConnectionProcessMessageErr == nil
 	// Once we enounter an error while processing messages from the client
 	// Log the error we encountered
 	log.Println("Error while processing message from the client", websocketConnectionProcessMessageErr)
 	// If there is an error while sending the error to the client, log the error
-	if writeMessageErr := sendErrorToClient(websocketConnectionProcessMessageErr, websocketConnection); writeMessageErr != nil {
+	if writeMessageErr := authenticatedClient.sendErrorToClient(); writeMessageErr != nil {
 		log.Println("Error while sending an error to the client:", writeMessageErr)
 	} // if writeMessageErr
 	log.Println("Terminating websocket connection to client.")
 	// Close the websocket connection
-	websocketConnection.Close()
+	authenticatedClient.websocketConnection.Close()
 	return
 	// Read first message from client
-} // func handleWebSocketConnection
+} // func authenticatedWebsocketConnection
 
-func sendErrorToClient(encounteredError error, websocketConnection *gorillaWebSocket.Conn) error {
+func (a *authenticatedClientFirestore) getClientDataFromStorage() (*authenticatedClientFirestore, error) {
+	// Create a new connection to the firestore storage service
+	firestoreClient, firestoreClientErr := newFirestoreConnection()
+	if firestoreClientErr != nil {
+		return a, firestoreClientErr
+	} // if firestoreClientErr != nil
+	a.firestoreConnection = firestoreClient
+	// Initialise an empty context with no values, no deadline, which will never be canceled
+	networkContext := context.Background()
+	// Get a snapshot of the document that contains the data we are interested in
+	documentSnapshot, documentSnapshotErr := a.firestoreConnection.Collection("clients").Doc(a.authenticatedIdentityPublicKeyHex).Get(networkContext)
+	if documentSnapshotErr != nil {
+		return a, documentSnapshotErr
+	} // if documentSnapshotErr != nil
+	// Retreive the data from the document snapshot into a map[string]interface{}
+	clientDataMap := documentSnapshot.Data()
+	// If the client profile exists in the storage
+	if singleUserProfileBase64, exists := clientDataMap["profile"]; exists {
+		// Base64 decode the it to get the protobuf bytes
+		singleUserProfile, singleUserProfileErr := base64.StdEncoding.DecodeString(singleUserProfileBase64.(string))
+		// If there is an error with the base64 decoding, return the error
+		if singleUserProfileErr != nil {
+			return a, singleUserProfileErr
+		} // if singleUserProfileErr
+		a.profile = singleUserProfile
+	} // if singleUserProfileBase64, exists
+	if singleUserSignedPreKeyBase64, exists := clientDataMap["signedPreKey"]; exists {
+		// Base64 decode the it to get the protobuf bytes
+		singleUserSignedPreKey, singleUserSignedPreKeyErr := base64.StdEncoding.DecodeString(singleUserSignedPreKeyBase64.(string))
+		// If there is an error with the base64 decoding, fill in the error field in the message to client with the error that occured
+		if singleUserSignedPreKeyErr != nil {
+			return a, singleUserSignedPreKeyErr
+		} // if singleUserProfileErr
+		a.signedPreKey = singleUserSignedPreKey
+	} // if singleUserSignedPreKeyBase64, exists
+	// @TODO check if the amount of oneTimePreKeys is sufficient
+	// If there there are oneTimePreKeys in the storage storage
+	if singleUserOneTimePreKeys, exists := clientDataMap["oneTimePreKeys"]; exists {
+		// Cast the whole interface{} into a map[string]interface{} as per data firestore spec
+		singleUserOneTimePreKeysMap := singleUserOneTimePreKeys.(map[string]interface{})
+		// As long as we have at least one oneTimePreKey
+		for _, singleUserOneTimePreKeyBase64 := range singleUserOneTimePreKeysMap {
+			// Base64 decode the it to get the protobuf bytes
+			singleUserOneTimePreKey, singleUserOneTimePreKeyErr := base64.StdEncoding.DecodeString(singleUserOneTimePreKeyBase64.(string))
+			// If there is an error with the base64 decoding, return the error
+			if singleUserOneTimePreKeyErr != nil {
+				return a, singleUserOneTimePreKeyErr
+			} // if singleUserProfileErr
+			a.oneTimePreKeys = append(a.oneTimePreKeys, singleUserOneTimePreKey)
+		} // for singleUserOneTimePreKeyIndex, singleUserOneTimePreKey
+	} // if singleUserSignedPreKeyBase64, exists
+	// If there are undelivered messages in the storage
+	if singleUserChatMessages, exists := clientDataMap["chatMessages"]; exists {
+		// Cast the whole interface{} into a map[string]interface{} as per data firestore spec
+		singleUserChatMessagesMap := singleUserChatMessages.(map[string]interface{})
+		// As long as we have at least one chatMessage
+		for _, singleUserChatMessageBase64 := range singleUserChatMessagesMap {
+			// Base64 decode the it to get the protobuf bytes
+			singleUserChatMessage, singleUserChatMessageErr := base64.StdEncoding.DecodeString(singleUserChatMessageBase64.(string))
+			// If there is an error with the base64 decoding, return the error
+			if singleUserChatMessageErr != nil {
+				return a, singleUserChatMessageErr
+			} // if singleUserProfileErr
+			// Append each chat message into the messagesToBeDelivered [][]byte slice
+			a.messagesToBeDelivered = append(a.messagesToBeDelivered, singleUserChatMessage)
+		} // for singleUserOneTimePreKeyIndex, singleUserOneTimePreKey
+	} // if singleUserSignedPreKeyBase64, exists
+	return a, nil
+} // func getClientDataFromDatastore
+
+func (a *authenticatedClientFirestore) persistChatMessagesFromClient(messagesFromClient []*backendProtobuf.ChatMessage) error {
+	// For each message received from client
+	for _, singleMessageFromClient := range messagesFromClient {
+		// Use protobuf to marshal the message into bytes so that we can store it easily
+		chatMessageProtobufBytes, chatMessageProtobufError := golangProto.Marshal(singleMessageFromClient)
+		// If there is an error while marshaling the individual message from the client, return it
+		if chatMessageProtobufError != nil {
+			return chatMessageProtobufError
+		} // if chatMessageProtobufError != nil
+		// Store the message from the client
+		_, firestoreWriteDataErr := a.firestoreConnection.Collection("clients").Doc(hex.EncodeToString(singleMessageFromClient.Receiver)).Set(context.Background(), map[string]interface{}{
+			"chatMessages": map[string]interface{}{
+				string(singleMessageFromClient.MessageID): base64.StdEncoding.EncodeToString(chatMessageProtobufBytes),
+			},
+		}, firestore.MergeAll)
+		if firestoreWriteDataErr != nil {
+			return firestoreWriteDataErr
+		} // if firestoreWriteDataErr != nil
+		// Echo back the same message we received from the client back to him so that we inform him that the message has been persisted
+		if writeMessageError := a.websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, chatMessageProtobufBytes); writeMessageError != nil {
+			// If there is an error while sending a message to a client
+			return writeMessageError
+		} // if writeMessageError != nil
+	} // for _, singleMessageFromClient
+	return nil
+} // func (a *authenticatedClientFirestore) persistChatMessages
+
+func (a *authenticatedClientFirestore) persistOneTimePreKeysFromClient(oneTimePreKeysFromClient []*backendProtobuf.PreKey) error {
+	// Initialise an empty context with no values, no deadline, which will never be canceled
+	networkContext := context.Background()
+	// For each one time pre key received from client
+	for _, oneTimePreKeyFromClient := range oneTimePreKeysFromClient {
+		// Use protobuf to marshal the oneTimePreKey into bytes so that we can store it easily
+		oneTimePreKeyFromClientProtobufBytes, protoMarshalErr := golangProto.Marshal(oneTimePreKeyFromClient)
+		// If there is an error while marshalling the one time pre key from the client, return it
+		if protoMarshalErr != nil {
+			return protoMarshalErr
+		} // if protoMarshalErr
+		// Store the one time pre key from the client
+		_, firestoreWriteDataErr := a.firestoreConnection.Collection("clients").Doc(a.authenticatedIdentityPublicKeyHex).Set(networkContext, map[string]interface{}{
+			"oneTimePreKeys": map[string]interface{}{
+				fmt.Sprint(oneTimePreKeyFromClient.TimeStamp): base64.StdEncoding.EncodeToString(oneTimePreKeyFromClientProtobufBytes),
+			},
+		}, firestore.MergeAll)
+		if firestoreWriteDataErr != nil {
+			return firestoreWriteDataErr
+		} // if firestoreWriteDataErr != nil
+		if writeMessageError := a.websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, oneTimePreKeyFromClientProtobufBytes); writeMessageError != nil {
+			return writeMessageError
+		} // if writeMessageError
+	} // for _, oneTimePreKeyFromClient
+	return nil
+} // func persistOneTimeKeysFromClient
+
+func (a *authenticatedClientFirestore) persistSignedPreKeyFromClient(signedPreKeyFromClient *backendProtobuf.PreKey) error {
+	// Use protobuf to marshal the signed pre key into bytes so that we can store it easily
+	signedPreKeyFromClientProtobufBytes, protoMarshalErr := golangProto.Marshal(signedPreKeyFromClient)
+	// If there is an error while marshalling the signed pre key from the client, return it
+	if protoMarshalErr != nil {
+		return protoMarshalErr
+	} // if protoMarshalErr
+	// Initialise an empty context with no values, no deadline, which will never be canceled
+	networkContext := context.Background()
+	// Store the SignedPreKey from the client
+	_, firestoreWriteDataErr := a.firestoreConnection.Collection("clients").Doc(a.authenticatedIdentityPublicKeyHex).Set(networkContext, map[string]interface{}{
+		"signedPreKey": base64.StdEncoding.EncodeToString(signedPreKeyFromClientProtobufBytes),
+	}, firestore.MergeAll) // _, firestoreWriteDataErr
+	if firestoreWriteDataErr != nil {
+		return firestoreWriteDataErr
+	} // if firestoreWriteDataErr != nil
+	// Signal to the client that the SignedPreyKey has been persisted
+	if writeMessageError := a.websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, signedPreKeyFromClientProtobufBytes); writeMessageError != nil {
+		return writeMessageError
+	} // if writeMessageError
+	return nil
+} // func persistSignedPreKeyFromClient
+
+func (a *authenticatedClientFirestore) deleteFieldFromStorage(field, fieldID string) error {
+	// If we have a nested field we will delete it by using an identifier
+	if fieldID != "" {
+		// This is how we access a nested field in order to delete it specifically without deleting the other keys
+		field += "."
+	} // if fieldID != ""
+	// Delete the field
+	_, firestoreWriteDataErr := a.firestoreConnection.Collection("clients").Doc(a.authenticatedIdentityPublicKeyHex).Update(context.Background(), []firestore.Update{
+		{
+			Path:  field + fieldID,
+			Value: firestore.Delete,
+		}, // []firestore.Update
+	}) // _, firestoreWriteDataErr
+	return firestoreWriteDataErr
+} // func (a *authenticatedClientFirestore) deleteFieldFromStorage
+
+func (a *authenticatedClientFirestore) sendErrorToClient() error {
 	// Create a protobuf message structure to send back to the client
 	var messageToClientProtobuf backendProtobuf.BackendMessage
 	// Create a []byte variable to hold the marshaled protobuf bytes
@@ -153,26 +303,33 @@ func sendErrorToClient(encounteredError error, websocketConnection *gorillaWebSo
 	// Create an error variable to hold an error in case the protobuf marshaling failed
 	var messageToClientProtobufBytesErr error
 	// Set the authentication error in the message structure so it can be sent back to the client
-	messageToClientProtobuf.Error = encounteredError.Error()
+	if a.encounteredError != nil {
+		messageToClientProtobuf.Error = a.encounteredError.Error()
+	} // if a.encounteredError != nil
 	// If there is an error while marshaling the message structure, log the error and continue with the rest of the function
 	if messageToClientProtobufBytes, messageToClientProtobufBytesErr = golangProto.Marshal(&messageToClientProtobuf); messageToClientProtobufBytesErr != nil {
 		log.Println("Error while marshaling the message to client:", messageToClientProtobufBytesErr)
 	} // if messageToClientProtobufBytes
 	// Returned the marshaled message bytes
-	if writeMessageErr := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientProtobufBytes); writeMessageErr != nil {
+	if writeMessageErr := a.websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientProtobufBytes); writeMessageErr != nil {
 		return writeMessageErr
 	} // if writeMessageErr
 	// Return nil when no error was encountered
 	return nil
 } // func sendErrorToClient
 
-func processMessage(websocketConnection *gorillaWebSocket.Conn, authenticatedIdentityPublicKeyClient []byte, firestoreClient *firestore.Client) error {
+func (a *authenticatedClientFirestore) processMessage() error {
 	// Initialize an empty variable to hold the protobuf message
 	var messageFromClientProtobuf backendProtobuf.BackendMessage
 	// Read a message from a client over the websocket connection
-	_, messageFromClientBytes, readMessageErr := websocketConnection.ReadMessage()
+	_, messageFromClientBytes, readMessageErr := a.websocketConnection.ReadMessage()
+	// If there is an error while reading the message from client
 	if readMessageErr != nil {
-		return readMessageErr
+		// If it's not a normal connection closure, return an error
+		if !gorillaWebSocket.IsCloseError(readMessageErr, gorillaWebSocket.CloseNormalClosure) {
+			return readMessageErr
+		}
+		return nil
 	}
 	// Unmarshal the protobuf bytes from the message we received into our protobuf message structure
 	if protoUnmarshalErr := golangProto.Unmarshal(messageFromClientBytes, &messageFromClientProtobuf); protoUnmarshalErr != nil {
@@ -193,14 +350,19 @@ func processMessage(websocketConnection *gorillaWebSocket.Conn, authenticatedIde
 		// Inner switch in case we have a Request from client, cases are valid if they are true
 		switch {
 		case messageFromClientProtobuf.Request.Messages != nil:
-			return handleMessageFromClient(websocketConnection, messageFromClientProtobuf.Request.Messages, firestoreClient)
+			persistChatMessagesFromClientErr := a.persistChatMessagesFromClient(messageFromClientProtobuf.Request.Messages)
+			return persistChatMessagesFromClientErr
 		// @TODO wait for @Gross input on message states
 		case messageFromClientProtobuf.Request.MessageStateChange != nil:
 			fmt.Println(messageFromClientProtobuf.Request.MessageStateChange, "MessageStateChange")
 		case messageFromClientProtobuf.Request.NewOneTimePreKeys != 0:
 			return errors.New("Only backend is allowed to request NewOneTimePreKeys")
 		case messageFromClientProtobuf.Request.PreKeyBundle != nil:
-			return deliverRequestedPreKeyBundle(websocketConnection, messageFromClientProtobuf.Request.PreKeyBundle, firestoreClient)
+			usedOneTimePreKey, deliverRequestedPreKeyBundleErr := a.deliverRequestedPreKeyBundle(messageFromClientProtobuf.Request.PreKeyBundle)
+			if deliverRequestedPreKeyBundleErr == nil {
+				a.deleteFieldFromStorage("oneTimePreKeys", usedOneTimePreKey)
+			} // if deliverRequestedPreKeyBundleErr
+			return deliverRequestedPreKeyBundleErr
 		case messageFromClientProtobuf.Request.Auth != nil:
 			return errors.New("Backend should request authentication, not the client")
 		} // Inner switch {
@@ -211,11 +373,11 @@ func processMessage(websocketConnection *gorillaWebSocket.Conn, authenticatedIde
 		case messageFromClientProtobuf.Response.Auth != nil:
 			return errors.New("Authentication should not be handled here")
 		case messageFromClientProtobuf.Response.OneTimePrekeys != nil:
-			return persistOneTimeKeysFromClient(websocketConnection, messageFromClientProtobuf.Response.OneTimePrekeys, authenticatedIdentityPublicKeyClient, firestoreClient)
+			return a.persistOneTimePreKeysFromClient(messageFromClientProtobuf.Response.OneTimePrekeys)
 		case messageFromClientProtobuf.Response.PreKeyBundle != nil:
 			return errors.New("Only backend is allowed to provide a PreKeyBundle")
 		case messageFromClientProtobuf.Response.SignedPreKey != nil:
-			return persistSignedPreKeyFromClient(websocketConnection, messageFromClientProtobuf.Response.SignedPreKey, authenticatedIdentityPublicKeyClient, firestoreClient)
+			return a.persistSignedPreKeyFromClient(messageFromClientProtobuf.Response.SignedPreKey)
 		} // Inner switch in case we have a Response from client
 
 	// The only time it should reach the default case is when both messageFromClientProtobuf.Request == nil && messageFromClientProtobuf.Response == nil
@@ -229,91 +391,12 @@ func processMessage(websocketConnection *gorillaWebSocket.Conn, authenticatedIde
 		}
 
 		if messageFromClientProtobuf.RequestID == "" {
-			websocketConnection.Close()
+			fmt.Println("ERROR7")
+			a.websocketConnection.Close()
 		}
 	}
 	return nil
 } // func processMessage
-
-func persistOneTimeKeysFromClient(websocketConnection *gorillaWebSocket.Conn, oneTimePreKeysFromClient []*backendProtobuf.PreKey, authenticatedIdentityPublicKeyClient cryptoEd25519.PublicKey, firestoreClient *firestore.Client) error {
-	// Initialise an empty context with no values, no deadline, which will never be canceled
-	networkContext := context.Background()
-	// For each one time pre key received from client
-	for _, oneTimePreKeyFromClient := range oneTimePreKeysFromClient {
-		// Use protobuf to marshal the oneTimePreKey into bytes so that we can store it easily
-		oneTimePreKeyFromClientProtobufBytes, protoMarshalErr := golangProto.Marshal(oneTimePreKeyFromClient)
-		// If there is an error while marshalling the one time pre key from the client, return it
-		if protoMarshalErr != nil {
-			return protoMarshalErr
-		}
-		// Store the one time pre key from the client
-		_, firestoreWriteDataErr := firestoreClient.Collection("clients").Doc(hex.EncodeToString(authenticatedIdentityPublicKeyClient)).Set(networkContext, map[string]interface{}{
-			"oneTimePreKeys": map[string]interface{}{
-				fmt.Sprint(oneTimePreKeyFromClient.TimeStamp): base64.StdEncoding.EncodeToString(oneTimePreKeyFromClientProtobufBytes),
-			},
-		}, firestore.MergeAll)
-		if firestoreWriteDataErr != nil {
-			return firestoreWriteDataErr
-		} // if firestoreWriteDataErr != nil
-		if writeMessageError := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, oneTimePreKeyFromClientProtobufBytes); writeMessageError != nil {
-			return writeMessageError
-		} // if writeMessageError
-	} // for _, oneTimePreKeyFromClient
-	return nil
-} // func persistOneTimeKeysFromClient
-
-func persistSignedPreKeyFromClient(websocketConnection *gorillaWebSocket.Conn, signedPreKeyFromClient *backendProtobuf.PreKey, authenticatedIdentityPublicKeyClient cryptoEd25519.PublicKey, firestoreClient *firestore.Client) error {
-	// Use protobuf to marshal the signed pre key into bytes so that we can store it easily
-	signedPreKeyFromClientProtobufBytes, protoMarshalErr := golangProto.Marshal(signedPreKeyFromClient)
-	// If there is an error while marshalling the signed pre key from the client, return it
-	if protoMarshalErr != nil {
-		return protoMarshalErr
-	} // if protoMarshalErr
-	// Initialise an empty context with no values, no deadline, which will never be canceled
-	networkContext := context.Background()
-	// Store the SignedPreKey from the client
-	_, firestoreWriteDataErr := firestoreClient.Collection("clients").Doc(hex.EncodeToString(authenticatedIdentityPublicKeyClient)).Set(networkContext, map[string]interface{}{
-		"signedPreKey": base64.StdEncoding.EncodeToString(signedPreKeyFromClientProtobufBytes),
-	}, firestore.MergeAll) // _, firestoreWriteDataErr
-	if firestoreWriteDataErr != nil {
-		return firestoreWriteDataErr
-	} // if firestoreWriteDataErr != nil
-	// Signal to the client that the SignedPreyKey has been persisted
-	if writeMessageError := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, signedPreKeyFromClientProtobufBytes); writeMessageError != nil {
-		return writeMessageError
-	} // if writeMessageError
-	return nil
-} // func persistSignedPreKeyFromClient
-
-func handleMessageFromClient(websocketConnection *gorillaWebSocket.Conn, messagesFromClient []*backendProtobuf.ChatMessage, firestoreClient *firestore.Client) error {
-	// Initialise an empty context with no values, no deadline, which will never be canceled
-	networkContext := context.Background()
-	// For each message received from client
-	for _, singleMessageFromClient := range messagesFromClient {
-		// Use protobuf to marshal the message into bytes so that we can store it easily
-		chatMessageProtobufBytes, chatMessageProtobufError := golangProto.Marshal(singleMessageFromClient)
-		// If there is an error while marshaling the individual message from the client, return it
-		if chatMessageProtobufError != nil {
-			return chatMessageProtobufError
-		} // if chatMessageProtobufError != nil
-		// Store the message from the client
-		_, firestoreWriteDataErr := firestoreClient.Collection("clients").Doc(hex.EncodeToString(singleMessageFromClient.Receiver)).Set(networkContext, map[string]interface{}{
-			"chatMessages": map[string]interface{}{
-				string(singleMessageFromClient.MessageID): base64.StdEncoding.EncodeToString(chatMessageProtobufBytes),
-			},
-		}, firestore.MergeAll)
-		if firestoreWriteDataErr != nil {
-			return firestoreWriteDataErr
-		} // if firestoreWriteDataErr != nil
-		// Echo back the same message we received from the client back to him so that we inform him that the message has been persisted
-
-		if writeMessageError := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, chatMessageProtobufBytes); writeMessageError != nil {
-			// If there is an error while sending a message to a client
-			return writeMessageError
-		} // if writeMessageError != nil
-	} // for _, singleMessageFromClient
-	return nil
-} // func handleMessageFromClient
 
 func newFirestoreConnection() (*firestore.Client, error) {
 	// Initialise an empty context with no values, no deadline, which will never be canceled
@@ -332,24 +415,13 @@ func newFirestoreConnection() (*firestore.Client, error) {
 	return firestoreClient, nil
 } // func newFirestoreConnection
 
-func getClientDataFromFirestore(identityPublicKeyHex string, firestoreClient *firestore.Client) (map[string]interface{}, error) {
-	// Initialise an empty context with no values, no deadline, which will never be canceled
-	networkContext := context.Background()
-	// Get a snapshot of the document that contains the data we are interested in
-	documentSnapshot, documentSnapshotErr := firestoreClient.Collection("clients").Doc(identityPublicKeyHex).Get(networkContext)
-	if documentSnapshotErr != nil {
-		return nil, documentSnapshotErr
-	} // if documentSnapshotErr != nil
-	// Retreive the data from the document snapshot into a map[string]interface{}
-	documentDataMap := documentSnapshot.Data()
-	return documentDataMap, nil
-} // func getClientDataFromDatastore
-
-func deliverRequestedPreKeyBundle(websocketConnection *gorillaWebSocket.Conn, requestedPreKeyBundle []byte, firestoreClient *firestore.Client) error {
-	// Initialise an empty context with no values, no deadline, which will never be canceled
-	networkContext := context.Background()
-	// Create a string representation of the publicKey associated with the user in the preKeyBundle request
-	requestedPreKeyBundleString := hex.EncodeToString(requestedPreKeyBundle)
+func (a *authenticatedClientFirestore) deliverRequestedPreKeyBundle(requestedPreKeyBundle []byte) (string, error) {
+	// Store a temporary snapshot of the original authenticatedClientFirestore
+	originalClient := *a
+	// Set the authenticatedIdentityPublicKeyHex to the identityPublicKeyHex of the client that we should obtain a preKeyBundle for
+	a.authenticatedIdentityPublicKeyHex = hex.EncodeToString(requestedPreKeyBundle)
+	// Get the data from storage related to the identityPublicKeyHex of the client that we should obtain a preKeyBundle for
+	a.getClientDataFromStorage()
 	// Initialize an empty variable to hold the marshaled protobuf bytes of our response to the client
 	var messageToClientProtobufBytes []byte
 	// Initialize an empty variable to hold a protobuf error in case there is one
@@ -366,74 +438,23 @@ func deliverRequestedPreKeyBundle(websocketConnection *gorillaWebSocket.Conn, re
 	messageToClientProtobuf.Response.PreKeyBundle.SignedPreKey = &backendProtobuf.PreKey{}
 	// Initialize an empty PreKey structure which would hold the requested OneTimePreKey if it exists
 	messageToClientProtobuf.Response.PreKeyBundle.OneTimePreKey = &backendProtobuf.PreKey{}
-	// Get the client data corresponding to the request
-	clientDataMap, clientDataMapErr := getClientDataFromFirestore(requestedPreKeyBundleString, firestoreClient)
-	// If there is an error obtaining the client data from the datastore, fill in the error field in the message to client with the error that occured
-	if clientDataMapErr != nil {
-		messageToClientProtobuf.Error = clientDataMapErr.Error()
-	} // if clientDataMapErr
-	// If the client data contains the profile of the client
-	if singleUserProfileBase64, exists := clientDataMap["profile"]; exists {
-		// Base64 decode the it to get the protobuf bytes
-		singleUserProfile, singleUserProfileErr := base64.StdEncoding.DecodeString(singleUserProfileBase64.(string))
-		// If there is an error with the base64 decoding, fill in the error field in the message to client with the error that occured
-		if singleUserProfileErr != nil {
-			messageToClientProtobuf.Error = singleUserProfileErr.Error()
-		} // if singleUserProfileErr
-		// Unmarshal it into our PreKeyBundle structure
-		if protoUnmarshalErr := golangProto.Unmarshal(singleUserProfile, messageToClientProtobuf.Response.PreKeyBundle.Profile); protoUnmarshalErr != nil {
-			// If there is an error with the unmarshalling, fill in the error field in the message to client with the error that occured
-			messageToClientProtobuf.Error = protoUnmarshalErr.Error()
-		} // if protoUnmarshalErr
-	} // if singleUserProfileBase64, exists
-	if singleUserSignedPreKeyBase64, exists := clientDataMap["signedPreKey"]; exists {
-		// Base64 decode the it to get the protobuf bytes
-		singleUserSignedPreKey, singleUserSignedPreKeyErr := base64.StdEncoding.DecodeString(singleUserSignedPreKeyBase64.(string))
-		// If there is an error with the base64 decoding, fill in the error field in the message to client with the error that occured
-		if singleUserSignedPreKeyErr != nil {
-			messageToClientProtobuf.Error = singleUserSignedPreKeyErr.Error()
-		} // if singleUserProfileErr
-		// Unmarshal it into our PreKeyBundle structure
-		if protoUnmarshalErr := golangProto.Unmarshal(singleUserSignedPreKey, messageToClientProtobuf.Response.PreKeyBundle.SignedPreKey); protoUnmarshalErr != nil {
-			// Fill in the error field in the message to client with the error that occured
-			messageToClientProtobuf.Error = protoUnmarshalErr.Error()
+	// If there is an error with the unmarshalling, fill in the error field in the message to client with the error that occured
+	if protoUnmarshalErr := golangProto.Unmarshal(a.profile, messageToClientProtobuf.Response.PreKeyBundle.Profile); protoUnmarshalErr != nil {
+		return "", protoUnmarshalErr
+	} // if protoUnmarshalErr
+	// If there is an error with the unmarshalling, fill in the error field in the message to client with the error that occured
+	if protoUnmarshalErr := golangProto.Unmarshal(a.signedPreKey, messageToClientProtobuf.Response.PreKeyBundle.SignedPreKey); protoUnmarshalErr != nil {
+		return "", protoUnmarshalErr
+	} // if protoUnmarshalErr != nil
+	// Use a single oneTimePreKey
+	for _, oneTimePreKey := range a.oneTimePreKeys {
+		// If there is an error with the unmarshalling, fill in the error field in the message to client with the error that occured
+		if protoUnmarshalErr := golangProto.Unmarshal(oneTimePreKey, messageToClientProtobuf.Response.PreKeyBundle.OneTimePreKey); protoUnmarshalErr != nil {
+			return "", protoUnmarshalErr
 		} // if protoUnmarshalErr != nil
-	} // if singleUserSignedPreKeyBase64, exists
-	// If OneTimePreKeys which match the client request exist in our backend storage
-
-	// @TODO check if the amount of oneTimePreKeys is sufficient
-	// If OneTimePreKeys which match the client request exist in our backend storage
-	if singleUserOneTimePreKeys, exists := clientDataMap["oneTimePreKeys"]; exists {
-		// Cast the whole interface{} into a map[string]interface{} as per data firestore spec
-		singleUserOneTimePreKeysMap := singleUserOneTimePreKeys.(map[string]interface{})
-		// As long as we have at least one oneTimePreKey
-		for _, singleUserOneTimePreKeyBase64 := range singleUserOneTimePreKeysMap {
-			// Base64 decode the it to get the protobuf bytes
-			singleUserOneTimePreKey, singleUserOneTimePreKeyErr := base64.StdEncoding.DecodeString(singleUserOneTimePreKeyBase64.(string))
-			// If there is an error with the base64 decoding, fill in the error field in the message to client with the error that occured
-			if singleUserOneTimePreKeyErr != nil {
-				messageToClientProtobuf.Error = singleUserOneTimePreKeyErr.Error()
-			} // if singleUserProfileErr
-			// Unmarshal it into our PreKeyBundle structure
-			if protoUnmarshalErr := golangProto.Unmarshal(singleUserOneTimePreKey, messageToClientProtobuf.Response.PreKeyBundle.OneTimePreKey); protoUnmarshalErr != nil {
-				// Fill in the error field in the message to client with the error that occured
-				messageToClientProtobuf.Error = protoUnmarshalErr.Error()
-			} // if protoUnmarshalErr != nil
-			// Delete the oneTimePreKey that was used
-			_, firestoreWriteDataErr := firestoreClient.Collection("clients").Doc(requestedPreKeyBundleString).Update(networkContext, []firestore.Update{
-				{
-					// This is how we access a nested field in order to delete it specifically without deleting the other keys
-					Path:  "oneTimePreKeys." + fmt.Sprint(messageToClientProtobuf.Response.PreKeyBundle.OneTimePreKey.TimeStamp),
-					Value: firestore.Delete,
-				}, // []firestore.Update
-			}) // _, firestoreWriteDataErr
-			if firestoreWriteDataErr != nil {
-				return firestoreWriteDataErr
-			} // if firestoreWriteDataErr != nil
-			// Break out of the for loop on purpose after consuming a single oneTimePreKey
-			break
-		} // for singleUserOneTimePreKeyIndex, singleUserOneTimePreKey
-	} // if singleUserSignedPreKeyBase64, exists
+		// break after using a single oneTimePreKey
+		break
+	} // for _, oneTimePreKey := range a.oneTimePreKeys {
 	// Use protobufs to marshal our message structure so that we can send it over the websocket connection
 	messageToClientProtobufBytes, messageToClientProtobufErr = golangProto.Marshal(&messageToClientProtobuf)
 	// If there is an error while trying to perform protobuf marshaling
@@ -446,10 +467,13 @@ func deliverRequestedPreKeyBundle(websocketConnection *gorillaWebSocket.Conn, re
 		messageToClientProtobufBytes, messageToClientProtobufErr = golangProto.Marshal(&messageToClientProtobuf)
 	} // if protobufMessageToClientErr != nil {
 	// Send our message over the websocket connection
-	return websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientProtobufBytes)
+	// Restore the temporary snapshot of the original authenticatedClientFirestore
+	a = &originalClient
+	usedOneTimePreKey := fmt.Sprint(messageToClientProtobuf.Response.PreKeyBundle.OneTimePreKey.TimeStamp)
+	return usedOneTimePreKey, a.websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientProtobufBytes)
 }
 
-func deliverMessages(websocketConnection *gorillaWebSocket.Conn, messagesToBeDelivered [][]byte) {
+func (a authenticatedClientFirestore) deliverMessages(messagesToBeDelivered [][]byte) error {
 	// Initialize an empty variable to hold the marshaled protobuf bytes
 	var messageToClientProtobufBytes []byte
 	// Initialize an empty variable to hold a protobuf error in case there is one
@@ -466,7 +490,7 @@ func deliverMessages(websocketConnection *gorillaWebSocket.Conn, messagesToBeDel
 		singleMessageToBeDeliveredProtobuf := backendProtobuf.ChatMessage{}
 		// Unmarshal the singleMessageToBeDelivered to the singleMessageToBeDeliveredProtobuf structure
 		if protoUnmarshalErr := golangProto.Unmarshal(singleMessageToBeDelivered, &singleMessageToBeDeliveredProtobuf); protoUnmarshalErr != nil {
-			messageToClientProtobuf.Error = protoUnmarshalErr.Error()
+			return protoUnmarshalErr
 		} // if protoUnmarshalErr
 		// Append the message  to the []*backendProtobuf.ChatMessage{} slice
 		messageToClientProtobuf.Request.Messages = append(messageToClientProtobuf.Request.Messages, &singleMessageToBeDeliveredProtobuf)
@@ -475,18 +499,13 @@ func deliverMessages(websocketConnection *gorillaWebSocket.Conn, messagesToBeDel
 	messageToClientProtobufBytes, messageToClientProtobufErr = golangProto.Marshal(&messageToClientProtobuf)
 	// If we encounter an error while marshaling the protobuf message structure
 	if messageToClientProtobufErr != nil {
-		// Overwrite the current message structure which caused the error with an empty one in hopes that an empty one wont cause an error
-		messageToClientProtobuf = backendProtobuf.BackendMessage{}
-		// Append the error that we encountered when trying to protobuf marshal the original message structure
-		messageToClientProtobuf.Error = messageToClientProtobufErr.Error()
-		// Attempt to marshal the protobuf message structure again which only contains the error we originally encountered so that the client knows there was an error
-		messageToClientProtobufBytes, messageToClientProtobufErr = golangProto.Marshal(&messageToClientProtobuf)
+		return messageToClientProtobufErr
 	}
 	// Send the mashalled protobuf message structure over the websocket connection
-	if writeMessageErr := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientProtobufBytes); writeMessageErr != nil {
-		log.Println(writeMessageErr)
+	if writeMessageErr := a.websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientProtobufBytes); writeMessageErr != nil {
+		return writeMessageErr
 	} // if writeMessageErr
-
+	return nil
 } // func deliverMessages
 
 func requestAuth(websocketConnection *gorillaWebSocket.Conn) ([]byte, error) {

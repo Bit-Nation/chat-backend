@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"testing"
+	"time"
 
 	panthalassaKeyManager "github.com/Bit-Nation/panthalassa/keyManager"
 	panthalassaKeyStore "github.com/Bit-Nation/panthalassa/keyStore"
@@ -168,7 +169,7 @@ func (c *Client) testUploadOneTimePreKeys(t *testing.T) {
 		preKeyProtobuf.IdentityKey = c.Profile.Information.IdentityPubKey
 		// Set a fix timestamp of the oneTimePreKey
 		// @TODO find out if this timestamp is fixed and related to oneTimePreKey creation time
-		preKeyProtobuf.TimeStamp = 777
+		preKeyProtobuf.TimeStamp = time.Now().UnixNano()
 		// Sign the IdentityKey with the KeyManager of the client
 		identityKeySignature, identityKeySignatureErr := c.KeyManager.IdentitySign(preKeyProtobuf.IdentityKey)
 		testifyRequire.Nil(t, identityKeySignatureErr)
@@ -294,7 +295,7 @@ func (c *Client) testSendMessage(t *testing.T, receiverPreKeyBundlePublic PreKey
 	// Set the message sender to the message Sender IdentityKey
 	chatMessageSender.Sender = []byte(identityPublicKeySenderHex)
 	// Set the message ID
-	chatMessageSender.MessageID = []byte("@TODO")
+	chatMessageSender.MessageID = []byte("@TODO_MESSAGEID")
 	// Set the used shared secret, (not in plain form)
 	chatMessageSender.UsedSharedSecret = []byte("@TODO")
 	// Set the version
