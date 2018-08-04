@@ -391,7 +391,6 @@ func (a *authenticatedClientFirestore) processMessage() error {
 		}
 
 		if messageFromClientProtobuf.RequestID == "" {
-			fmt.Println("ERROR7")
 			a.websocketConnection.Close()
 		}
 	}
