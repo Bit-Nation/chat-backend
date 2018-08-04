@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 
@@ -46,12 +47,103 @@ func StartWebSocketServer() {
 	gorillaRouter := gorillaMux.NewRouter()
 	// Bind an endpoint path to handleWebSocketConnection
 	gorillaRouter.HandleFunc("/chat", HandleWebSocketConnection)
+	gorillaRouter.HandleFunc("/profile", HandleProfile)
 	// Listen on a specific port for incoming connections
 	if listenAndServeErr := http.ListenAndServe(":8080", gorillaRouter); listenAndServeErr != nil {
 		// If there is an error while setting up, panic and show us the error
 		log.Fatal("ListenAndServe: " + listenAndServeErr.Error())
 	} // if listenAndServeErr
 } // func startWebSocketServer
+
+func getProfileFromStorage(identityPublicKeyHex string) ([]byte, error) {
+	// Create a new connection to the firestore storage service
+	firestoreConnection, firestoreConnectionErr := newFirestoreConnection()
+	if firestoreConnectionErr != nil {
+		return nil, firestoreConnectionErr
+	} // if firestoreClientErr != nil
+	// Initialise an empty context with no values, no deadline, which will never be canceled
+	networkContext := context.Background()
+	// Get a snapshot of the document that contains the data we are interested in
+	documentSnapshot, documentSnapshotErr := firestoreConnection.Collection("clients").Doc(identityPublicKeyHex).Get(networkContext)
+	// If there is an error fetching the document
+	if documentSnapshotErr != nil {
+		// Log the error but don't return it as it may leak non-sensitive data that it's better not to be leaked
+		log.Println(documentSnapshotErr)
+		return nil, errors.New("Profile not found")
+	} // if documentSnapshotErr != nil
+	// Retreive the data from the document snapshot into a map[string]interface{}
+	clientDataMap := documentSnapshot.Data()
+	// If the client profile exists in the storage
+	if singleUserProfileBase64, exists := clientDataMap["profile"]; exists {
+		// Base64 decode the it to get the protobuf bytes
+		singleUserProfile, singleUserProfileErr := base64.StdEncoding.DecodeString(singleUserProfileBase64.(string))
+		// If there is an error with the base64 decoding, return the error
+		if singleUserProfileErr != nil {
+			return nil, singleUserProfileErr
+		} // if singleUserProfileErr
+		return singleUserProfile, nil
+	} // if singleUserProfileBase64, exists
+	return nil, errors.New("Profile not found")
+}
+
+func persistProfileToStorage(identityPublicKeyHex string, profileBase64 string) error {
+	// Create a new connection to the firestore storage service
+	firestoreConnection, firestoreConnectionErr := newFirestoreConnection()
+	if firestoreConnectionErr != nil {
+		return firestoreConnectionErr
+	} // if firestoreConnectionErr != nil
+	// Persist the client profile
+	_, firestoreWriteDataErr := firestoreConnection.Collection("clients").Doc(identityPublicKeyHex).Set(context.Background(), map[string]interface{}{
+		"profile": profileBase64,
+	}, firestore.MergeAll)
+	if firestoreWriteDataErr != nil {
+		return firestoreWriteDataErr
+	} // if firestoreWriteDataErr != nil
+	return nil
+} // func persistProfileToStorage
+
+// HandleProfile decides what happens when a client requests or uploads a profile
+func HandleProfile(serverHTTPResponse http.ResponseWriter, clientHTTPRequest *http.Request) {
+	// Make sure the client passes the bearer authentication
+	if clientHTTPRequest.Header.Get("Bearer") != "5d41402abc4b2a76b9719d911017c592" {
+		http.Error(serverHTTPResponse, "Forbidden", 403)
+		return
+	} // if clientHTTPRequest.Header.Get("Bearer")
+	// Choose different actions depending on the type of request
+	switch clientHTTPRequest.Method {
+	case "GET":
+		// Get the identity public key for the client that we want to obtain the profile for
+		profile, profileErr := getProfileFromStorage(clientHTTPRequest.Header.Get("Identity"))
+		// If there is an error while obtaining the profile, inform the client
+		if profileErr != nil {
+			http.Error(serverHTTPResponse, profileErr.Error(), 400)
+			return
+		} // if profileErr != nil {
+		// Write the protobyfBytes of the Profile protobuf structure to the client, in case of ann error inform the client
+		if _, serverHTTPResponseErr := serverHTTPResponse.Write(profile); serverHTTPResponseErr != nil {
+			log.Println(serverHTTPResponseErr)
+			http.Error(serverHTTPResponse, serverHTTPResponseErr.Error(), 400)
+			return
+		} // if _, serverHTTPResponseErr
+	case "PUT":
+		// Read a base64 representation of the Profile protobuf structure bytes
+		profile, readErr := ioutil.ReadAll(clientHTTPRequest.Body)
+		if readErr != nil {
+			http.Error(serverHTTPResponse, readErr.Error(), 400)
+			return
+		} // if readErr != nil {
+		// Persist the base64 representation of the Profile protobuf structure bytes, in case of an error inform the client, othterwise inform that it's ok
+		if persistProfileToStorageErr := persistProfileToStorage(clientHTTPRequest.Header.Get("Identity"), string(profile)); persistProfileToStorageErr != nil {
+			http.Error(serverHTTPResponse, persistProfileToStorageErr.Error(), 400)
+		} else {
+			// Inform the client that everything is ok
+			serverHTTPResponse.WriteHeader(http.StatusOK)
+		} // else
+	// Forbid other methods at the time being
+	default:
+		http.Error(serverHTTPResponse, "Method Not Allowed", 405)
+	} // switch clientHTTPRequest.Method
+} // func HandleProfile
 
 // HandleWebSocketConnection decides what happens when a client establishes a websocket connection to the server
 func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTTPRequest *http.Request) {
