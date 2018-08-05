@@ -2,9 +2,7 @@ package chatbackend
 
 import (
 	"bytes"
-	"context"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -12,34 +10,12 @@ import (
 	"log"
 	"net/http"
 
-	firestore "cloud.google.com/go/firestore"
-	firebase "firebase.google.com/go"
 	backendProtobuf "github.com/Bit-Nation/protobuffers"
 	golangProto "github.com/golang/protobuf/proto"
 	gorillaMux "github.com/gorilla/mux"
 	gorillaWebSocket "github.com/gorilla/websocket"
 	cryptoEd25519 "golang.org/x/crypto/ed25519"
 )
-
-// Use interface for storage to make it easily swappable
-type storageInterface interface {
-	persistChatMessagesFromClient([]*backendProtobuf.ChatMessage) error
-	persistOneTimePreKeysFromClient([]*backendProtobuf.PreKey) error
-	persistSignedPreKeyFromClient(*backendProtobuf.PreKey) error
-	deleteFieldFromStorage(string, string) error
-	getClientDataFromStorage() (*authenticatedClientFirestore, error)
-}
-
-type authenticatedClientFirestore struct {
-	authenticatedIdentityPublicKeyHex string
-	firestoreConnection               *firestore.Client
-	websocketConnection               *gorillaWebSocket.Conn
-	encounteredError                  error
-	messagesToBeDelivered             [][]byte
-	oneTimePreKeys                    [][]byte
-	signedPreKey                      []byte
-	profile                           []byte
-}
 
 // StartWebSocketServer starts the websocket server
 func StartWebSocketServer() {
@@ -54,53 +30,6 @@ func StartWebSocketServer() {
 		log.Fatal("ListenAndServe: " + listenAndServeErr.Error())
 	} // if listenAndServeErr
 } // func startWebSocketServer
-
-func getProfileFromStorage(identityPublicKeyHex string) ([]byte, error) {
-	// Create a new connection to the firestore storage service
-	firestoreConnection, firestoreConnectionErr := newFirestoreConnection()
-	if firestoreConnectionErr != nil {
-		return nil, firestoreConnectionErr
-	} // if firestoreClientErr != nil
-	// Initialise an empty context with no values, no deadline, which will never be canceled
-	networkContext := context.Background()
-	// Get a snapshot of the document that contains the data we are interested in
-	documentSnapshot, documentSnapshotErr := firestoreConnection.Collection("clients").Doc(identityPublicKeyHex).Get(networkContext)
-	// If there is an error fetching the document
-	if documentSnapshotErr != nil {
-		// Log the error but don't return it as it may leak non-sensitive data that it's better not to be leaked
-		log.Println(documentSnapshotErr)
-		return nil, errors.New("Profile not found")
-	} // if documentSnapshotErr != nil
-	// Retreive the data from the document snapshot into a map[string]interface{}
-	clientDataMap := documentSnapshot.Data()
-	// If the client profile exists in the storage
-	if singleUserProfileBase64, exists := clientDataMap["profile"]; exists {
-		// Base64 decode the it to get the protobuf bytes
-		singleUserProfile, singleUserProfileErr := base64.StdEncoding.DecodeString(singleUserProfileBase64.(string))
-		// If there is an error with the base64 decoding, return the error
-		if singleUserProfileErr != nil {
-			return nil, singleUserProfileErr
-		} // if singleUserProfileErr
-		return singleUserProfile, nil
-	} // if singleUserProfileBase64, exists
-	return nil, errors.New("Profile not found")
-}
-
-func persistProfileToStorage(identityPublicKeyHex string, profileBase64 string) error {
-	// Create a new connection to the firestore storage service
-	firestoreConnection, firestoreConnectionErr := newFirestoreConnection()
-	if firestoreConnectionErr != nil {
-		return firestoreConnectionErr
-	} // if firestoreConnectionErr != nil
-	// Persist the client profile
-	_, firestoreWriteDataErr := firestoreConnection.Collection("clients").Doc(identityPublicKeyHex).Set(context.Background(), map[string]interface{}{
-		"profile": profileBase64,
-	}, firestore.MergeAll)
-	if firestoreWriteDataErr != nil {
-		return firestoreWriteDataErr
-	} // if firestoreWriteDataErr != nil
-	return nil
-} // func persistProfileToStorage
 
 // HandleProfile decides what happens when a client requests or uploads a profile
 func HandleProfile(serverHTTPResponse http.ResponseWriter, clientHTTPRequest *http.Request) {
@@ -224,169 +153,6 @@ func authenticatedWebsocketConnection(storage storageInterface) {
 	// Read first message from client
 } // func authenticatedWebsocketConnection
 
-func (a *authenticatedClientFirestore) getClientDataFromStorage() (*authenticatedClientFirestore, error) {
-	// Create a new connection to the firestore storage service
-	firestoreClient, firestoreClientErr := newFirestoreConnection()
-	if firestoreClientErr != nil {
-		return a, firestoreClientErr
-	} // if firestoreClientErr != nil
-	a.firestoreConnection = firestoreClient
-	// Initialise an empty context with no values, no deadline, which will never be canceled
-	networkContext := context.Background()
-	// Get a snapshot of the document that contains the data we are interested in
-	documentSnapshot, documentSnapshotErr := a.firestoreConnection.Collection("clients").Doc(a.authenticatedIdentityPublicKeyHex).Get(networkContext)
-	if documentSnapshotErr != nil {
-		return a, documentSnapshotErr
-	} // if documentSnapshotErr != nil
-	// Retreive the data from the document snapshot into a map[string]interface{}
-	clientDataMap := documentSnapshot.Data()
-	// If the client profile exists in the storage
-	if singleUserProfileBase64, exists := clientDataMap["profile"]; exists {
-		// Base64 decode the it to get the protobuf bytes
-		singleUserProfile, singleUserProfileErr := base64.StdEncoding.DecodeString(singleUserProfileBase64.(string))
-		// If there is an error with the base64 decoding, return the error
-		if singleUserProfileErr != nil {
-			return a, singleUserProfileErr
-		} // if singleUserProfileErr
-		a.profile = singleUserProfile
-	} // if singleUserProfileBase64, exists
-	if singleUserSignedPreKeyBase64, exists := clientDataMap["signedPreKey"]; exists {
-		// Base64 decode the it to get the protobuf bytes
-		singleUserSignedPreKey, singleUserSignedPreKeyErr := base64.StdEncoding.DecodeString(singleUserSignedPreKeyBase64.(string))
-		// If there is an error with the base64 decoding, fill in the error field in the message to client with the error that occured
-		if singleUserSignedPreKeyErr != nil {
-			return a, singleUserSignedPreKeyErr
-		} // if singleUserProfileErr
-		a.signedPreKey = singleUserSignedPreKey
-	} // if singleUserSignedPreKeyBase64, exists
-	// @TODO check if the amount of oneTimePreKeys is sufficient
-	// If there there are oneTimePreKeys in the storage storage
-	if singleUserOneTimePreKeys, exists := clientDataMap["oneTimePreKeys"]; exists {
-		// Cast the whole interface{} into a map[string]interface{} as per data firestore spec
-		singleUserOneTimePreKeysMap := singleUserOneTimePreKeys.(map[string]interface{})
-		// As long as we have at least one oneTimePreKey
-		for _, singleUserOneTimePreKeyBase64 := range singleUserOneTimePreKeysMap {
-			// Base64 decode the it to get the protobuf bytes
-			singleUserOneTimePreKey, singleUserOneTimePreKeyErr := base64.StdEncoding.DecodeString(singleUserOneTimePreKeyBase64.(string))
-			// If there is an error with the base64 decoding, return the error
-			if singleUserOneTimePreKeyErr != nil {
-				return a, singleUserOneTimePreKeyErr
-			} // if singleUserProfileErr
-			a.oneTimePreKeys = append(a.oneTimePreKeys, singleUserOneTimePreKey)
-		} // for singleUserOneTimePreKeyIndex, singleUserOneTimePreKey
-	} // if singleUserSignedPreKeyBase64, exists
-	// If there are undelivered messages in the storage
-	if singleUserChatMessages, exists := clientDataMap["chatMessages"]; exists {
-		// Cast the whole interface{} into a map[string]interface{} as per data firestore spec
-		singleUserChatMessagesMap := singleUserChatMessages.(map[string]interface{})
-		// As long as we have at least one chatMessage
-		for _, singleUserChatMessageBase64 := range singleUserChatMessagesMap {
-			// Base64 decode the it to get the protobuf bytes
-			singleUserChatMessage, singleUserChatMessageErr := base64.StdEncoding.DecodeString(singleUserChatMessageBase64.(string))
-			// If there is an error with the base64 decoding, return the error
-			if singleUserChatMessageErr != nil {
-				return a, singleUserChatMessageErr
-			} // if singleUserProfileErr
-			// Append each chat message into the messagesToBeDelivered [][]byte slice
-			a.messagesToBeDelivered = append(a.messagesToBeDelivered, singleUserChatMessage)
-		} // for singleUserOneTimePreKeyIndex, singleUserOneTimePreKey
-	} // if singleUserSignedPreKeyBase64, exists
-	return a, nil
-} // func getClientDataFromDatastore
-
-func (a *authenticatedClientFirestore) persistChatMessagesFromClient(messagesFromClient []*backendProtobuf.ChatMessage) error {
-	// For each message received from client
-	for _, singleMessageFromClient := range messagesFromClient {
-		// Use protobuf to marshal the message into bytes so that we can store it easily
-		chatMessageProtobufBytes, chatMessageProtobufError := golangProto.Marshal(singleMessageFromClient)
-		// If there is an error while marshaling the individual message from the client, return it
-		if chatMessageProtobufError != nil {
-			return chatMessageProtobufError
-		} // if chatMessageProtobufError != nil
-		// Store the message from the client
-		_, firestoreWriteDataErr := a.firestoreConnection.Collection("clients").Doc(hex.EncodeToString(singleMessageFromClient.Receiver)).Set(context.Background(), map[string]interface{}{
-			"chatMessages": map[string]interface{}{
-				string(singleMessageFromClient.MessageID): base64.StdEncoding.EncodeToString(chatMessageProtobufBytes),
-			},
-		}, firestore.MergeAll)
-		if firestoreWriteDataErr != nil {
-			return firestoreWriteDataErr
-		} // if firestoreWriteDataErr != nil
-		// Echo back the same message we received from the client back to him so that we inform him that the message has been persisted
-		if writeMessageError := a.websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, chatMessageProtobufBytes); writeMessageError != nil {
-			// If there is an error while sending a message to a client
-			return writeMessageError
-		} // if writeMessageError != nil
-	} // for _, singleMessageFromClient
-	return nil
-} // func (a *authenticatedClientFirestore) persistChatMessages
-
-func (a *authenticatedClientFirestore) persistOneTimePreKeysFromClient(oneTimePreKeysFromClient []*backendProtobuf.PreKey) error {
-	// Initialise an empty context with no values, no deadline, which will never be canceled
-	networkContext := context.Background()
-	// For each one time pre key received from client
-	for _, oneTimePreKeyFromClient := range oneTimePreKeysFromClient {
-		// Use protobuf to marshal the oneTimePreKey into bytes so that we can store it easily
-		oneTimePreKeyFromClientProtobufBytes, protoMarshalErr := golangProto.Marshal(oneTimePreKeyFromClient)
-		// If there is an error while marshalling the one time pre key from the client, return it
-		if protoMarshalErr != nil {
-			return protoMarshalErr
-		} // if protoMarshalErr
-		// Store the one time pre key from the client
-		_, firestoreWriteDataErr := a.firestoreConnection.Collection("clients").Doc(a.authenticatedIdentityPublicKeyHex).Set(networkContext, map[string]interface{}{
-			"oneTimePreKeys": map[string]interface{}{
-				fmt.Sprint(oneTimePreKeyFromClient.TimeStamp): base64.StdEncoding.EncodeToString(oneTimePreKeyFromClientProtobufBytes),
-			},
-		}, firestore.MergeAll)
-		if firestoreWriteDataErr != nil {
-			return firestoreWriteDataErr
-		} // if firestoreWriteDataErr != nil
-		if writeMessageError := a.websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, oneTimePreKeyFromClientProtobufBytes); writeMessageError != nil {
-			return writeMessageError
-		} // if writeMessageError
-	} // for _, oneTimePreKeyFromClient
-	return nil
-} // func persistOneTimeKeysFromClient
-
-func (a *authenticatedClientFirestore) persistSignedPreKeyFromClient(signedPreKeyFromClient *backendProtobuf.PreKey) error {
-	// Use protobuf to marshal the signed pre key into bytes so that we can store it easily
-	signedPreKeyFromClientProtobufBytes, protoMarshalErr := golangProto.Marshal(signedPreKeyFromClient)
-	// If there is an error while marshalling the signed pre key from the client, return it
-	if protoMarshalErr != nil {
-		return protoMarshalErr
-	} // if protoMarshalErr
-	// Initialise an empty context with no values, no deadline, which will never be canceled
-	networkContext := context.Background()
-	// Store the SignedPreKey from the client
-	_, firestoreWriteDataErr := a.firestoreConnection.Collection("clients").Doc(a.authenticatedIdentityPublicKeyHex).Set(networkContext, map[string]interface{}{
-		"signedPreKey": base64.StdEncoding.EncodeToString(signedPreKeyFromClientProtobufBytes),
-	}, firestore.MergeAll) // _, firestoreWriteDataErr
-	if firestoreWriteDataErr != nil {
-		return firestoreWriteDataErr
-	} // if firestoreWriteDataErr != nil
-	// Signal to the client that the SignedPreyKey has been persisted
-	if writeMessageError := a.websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, signedPreKeyFromClientProtobufBytes); writeMessageError != nil {
-		return writeMessageError
-	} // if writeMessageError
-	return nil
-} // func persistSignedPreKeyFromClient
-
-func (a *authenticatedClientFirestore) deleteFieldFromStorage(field, fieldID string) error {
-	// If we have a nested field we will delete it by using an identifier
-	if fieldID != "" {
-		// This is how we access a nested field in order to delete it specifically without deleting the other keys
-		field += "."
-	} // if fieldID != ""
-	// Delete the field
-	_, firestoreWriteDataErr := a.firestoreConnection.Collection("clients").Doc(a.authenticatedIdentityPublicKeyHex).Update(context.Background(), []firestore.Update{
-		{
-			Path:  field + fieldID,
-			Value: firestore.Delete,
-		}, // []firestore.Update
-	}) // _, firestoreWriteDataErr
-	return firestoreWriteDataErr
-} // func (a *authenticatedClientFirestore) deleteFieldFromStorage
-
 func (a *authenticatedClientFirestore) sendErrorToClient() error {
 	// Create a protobuf message structure to send back to the client
 	var messageToClientProtobuf backendProtobuf.BackendMessage
@@ -488,23 +254,6 @@ func (a *authenticatedClientFirestore) processMessage() error {
 	}
 	return nil
 } // func processMessage
-
-func newFirestoreConnection() (*firestore.Client, error) {
-	// Initialise an empty context with no values, no deadline, which will never be canceled
-	networkContext := context.Background()
-	// Initialise a new firebase application using the context
-	firebaseApp, firebaseAppErr := firebase.NewApp(networkContext, nil)
-	if firebaseAppErr != nil {
-		return nil, firebaseAppErr
-	} // if firebaseAppErr != nil
-	// Initialise the firestore
-	firestoreClient, firestoreError := firebaseApp.Firestore(networkContext)
-	if firestoreError != nil {
-		return nil, firestoreError
-	} // if firestoreError != nil
-	// Make sure to close the firestore once the function returns
-	return firestoreClient, nil
-} // func newFirestoreConnection
 
 func (a *authenticatedClientFirestore) deliverRequestedPreKeyBundle(requestedPreKeyBundle []byte) (string, error) {
 	// Store a temporary snapshot of the original authenticatedClientFirestore
