@@ -181,10 +181,13 @@ func newWebSocketConnection(t *testing.T, websocketURL, bearer string) *gorillaW
 	websocketDialer := gorillaWebSocket.Dialer{}
 	// Initialize a websocket connection of a message sender
 	websocketConnection, websocketConnectionResponse, websocketConnectionErr := websocketDialer.Dial(websocketURL, customHeaders)
-	// Read the response from the websocket package which should contain debug info in case of error
-	websocketConnectionResponseBody, readErr := ioutil.ReadAll(websocketConnectionResponse.Body)
-	testifyRequire.Nil(t, readErr)
-	testifyRequire.Equal(t, []byte{}, websocketConnectionResponseBody)
+	// Check if we have a valid object first to avoid panic
+	if websocketConnectionResponse != nil {
+		// Read the response from the websocket package which should contain debug info in case of error
+		websocketConnectionResponseBody, readErr := ioutil.ReadAll(websocketConnectionResponse.Body)
+		testifyRequire.Nil(t, readErr)
+		testifyRequire.Equal(t, []byte{}, websocketConnectionResponseBody)
+	}
 	testifyRequire.Nil(t, websocketConnectionErr)
 	return websocketConnection
 }
