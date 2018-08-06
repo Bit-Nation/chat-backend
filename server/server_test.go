@@ -37,7 +37,6 @@ type Client struct {
 func TestHandleWebSocketConnection(t *testing.T) {
 	// Start the websocket server
 	go StartWebSocketServer()
-	//time.Sleep(10000000 * time.Second)
 	// Create a new static SignedPreKey to make testing easier
 	signedPreKeyReceiver := newStaticSignedPreKeyReceiver()
 	// Create a new static OneTimePreKey to make testing easier
@@ -117,7 +116,7 @@ func putProfileOnBackend(t *testing.T) {
 	backendResponse, backendResponseErr := http.DefaultClient.Do(httpRequest)
 	testifyRequire.Nil(t, backendResponseErr)
 	// Make sure that all went well
-	testifyRequire.Equal(t, backendResponse.Status, "200 OK")
+	testifyRequire.Equal(t, "200 OK", backendResponse.Status)
 	defer backendResponse.Body.Close()
 } // func putProfileOnBackend
 

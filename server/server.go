@@ -3,6 +3,7 @@ package chatbackend
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"log"
 	"net/http"
 
+	profile "github.com/Bit-Nation/panthalassa/profile"
 	backendProtobuf "github.com/Bit-Nation/protobuffers"
 	golangProto "github.com/golang/protobuf/proto"
 	gorillaMux "github.com/gorilla/mux"
@@ -45,25 +47,56 @@ func HandleProfile(serverHTTPResponse http.ResponseWriter, clientHTTPRequest *ht
 		profile, profileErr := getProfileFromStorage(clientHTTPRequest.Header.Get("Identity"))
 		// If there is an error while obtaining the profile, inform the client
 		if profileErr != nil {
-			http.Error(serverHTTPResponse, profileErr.Error(), 400)
+			http.Error(serverHTTPResponse, profileErr.Error(), 500)
 			return
 		} // if profileErr != nil {
 		// Write the protobyfBytes of the Profile protobuf structure to the client, in case of ann error inform the client
 		if _, serverHTTPResponseErr := serverHTTPResponse.Write(profile); serverHTTPResponseErr != nil {
 			log.Println(serverHTTPResponseErr)
-			http.Error(serverHTTPResponse, serverHTTPResponseErr.Error(), 400)
+			http.Error(serverHTTPResponse, serverHTTPResponseErr.Error(), 500)
 			return
 		} // if _, serverHTTPResponseErr
 	case "PUT":
+		var profileProtobuf backendProtobuf.Profile
 		// Read a base64 representation of the Profile protobuf structure bytes
-		profile, readErr := ioutil.ReadAll(clientHTTPRequest.Body)
+		profileBase64Bytes, readErr := ioutil.ReadAll(clientHTTPRequest.Body)
 		if readErr != nil {
-			http.Error(serverHTTPResponse, readErr.Error(), 400)
+			http.Error(serverHTTPResponse, readErr.Error(), 500)
 			return
 		} // if readErr != nil {
+		// Create a string representation of the profileBase64Bytes for easier usage and decoding
+		profileBase64String := string(profileBase64Bytes)
+		// Decode the string representation of the profileBase64Bytes into protobuf bytes
+		profileProtobufBytes, profileBytesErr := base64.StdEncoding.DecodeString(profileBase64String)
+		if profileBytesErr != nil {
+			http.Error(serverHTTPResponse, readErr.Error(), 500)
+			return
+		} // if profileBytesErr != nil
+		// Unmarshal the protobuf bytes into protobuf Profile structure
+		if protoUnmarshalErr := golangProto.Unmarshal(profileProtobufBytes, &profileProtobuf); protoUnmarshalErr != nil {
+			http.Error(serverHTTPResponse, protoUnmarshalErr.Error(), 500)
+			return
+		} // if protoUnmarshalErr
+		// Create a profile object from our protobuf Profile structure
+		profileObject, profileErr := profile.ProtobufToProfile(&profileProtobuf)
+		if profileErr != nil {
+			http.Error(serverHTTPResponse, profileErr.Error(), 500)
+			return
+		}
+		// Validate the signature of the profile, return if there is an error as we don't accept profiles with invalid signatures
+		validProfileSignature, validProfileSignatureErr := profileObject.SignaturesValid()
+		if validProfileSignatureErr != nil {
+			http.Error(serverHTTPResponse, validProfileSignatureErr.Error(), 500)
+			return
+		}
+		// Double check that the SignaturesValid() method returned true
+		if !validProfileSignature {
+			http.Error(serverHTTPResponse, errors.New("Invalid Signature").Error(), 500)
+			return
+		}
 		// Persist the base64 representation of the Profile protobuf structure bytes, in case of an error inform the client, othterwise inform that it's ok
-		if persistProfileToStorageErr := persistProfileToStorage(clientHTTPRequest.Header.Get("Identity"), string(profile)); persistProfileToStorageErr != nil {
-			http.Error(serverHTTPResponse, persistProfileToStorageErr.Error(), 400)
+		if persistProfileToStorageErr := persistProfileToStorage(clientHTTPRequest.Header.Get("Identity"), profileBase64String); persistProfileToStorageErr != nil {
+			http.Error(serverHTTPResponse, persistProfileToStorageErr.Error(), 500)
 		} else {
 			// Inform the client that everything is ok
 			serverHTTPResponse.WriteHeader(http.StatusOK)

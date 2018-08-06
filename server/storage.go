@@ -108,6 +108,8 @@ func (a *authenticatedClientFirestore) getClientDataFromStorage() (*authenticate
 	a.firestoreConnection = firestoreClient
 	// Initialise an empty context with no values, no deadline, which will never be canceled
 	networkContext := context.Background()
+	// Make sure a document exists on the storage for the client that is requesting it, if it exists, it wont get overwritten, if it doesn't it will be created
+	a.firestoreConnection.Collection("clients").Doc(a.authenticatedIdentityPublicKeyHex).Set(networkContext, map[string]interface{}{"OK": 1}, firestore.MergeAll)
 	// Get a snapshot of the document that contains the data we are interested in
 	documentSnapshot, documentSnapshotErr := a.firestoreConnection.Collection("clients").Doc(a.authenticatedIdentityPublicKeyHex).Get(networkContext)
 	if documentSnapshotErr != nil {
