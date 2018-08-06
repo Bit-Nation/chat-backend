@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log"
+	"log/syslog"
 
 	firestore "cloud.google.com/go/firestore"
 	firebase "firebase.google.com/go"
@@ -65,7 +65,7 @@ func getProfileFromStorage(identityPublicKeyHex string) ([]byte, error) {
 	// If there is an error fetching the document
 	if documentSnapshotErr != nil {
 		// Log the error but don't return it as it may leak non-sensitive data that it's better not to be leaked
-		log.Println(documentSnapshotErr)
+		logError(syslog.LOG_ERR, documentSnapshotErr)
 		return nil, errors.New("Profile not found")
 	} // if documentSnapshotErr != nil
 	// Retreive the data from the document snapshot into a map[string]interface{}

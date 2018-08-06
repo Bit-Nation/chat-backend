@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"log/syslog"
 	"net/http"
+	"os"
 
 	profile "github.com/Bit-Nation/panthalassa/profile"
 	backendProtobuf "github.com/Bit-Nation/protobuffers"
@@ -18,6 +20,8 @@ import (
 	gorillaWebSocket "github.com/gorilla/websocket"
 	cryptoEd25519 "golang.org/x/crypto/ed25519"
 )
+
+var papertrailURL = os.Getenv("PAPERTRAIL")
 
 // StartWebSocketServer starts the websocket server
 func StartWebSocketServer() {
@@ -29,7 +33,7 @@ func StartWebSocketServer() {
 	// Listen on a specific port for incoming connections
 	if listenAndServeErr := http.ListenAndServe(":8080", gorillaRouter); listenAndServeErr != nil {
 		// If there is an error while setting up, panic and show us the error
-		log.Fatal("ListenAndServe: " + listenAndServeErr.Error())
+		logError(syslog.LOG_CRIT, listenAndServeErr)
 	} // if listenAndServeErr
 } // func startWebSocketServer
 
@@ -52,7 +56,7 @@ func HandleProfile(serverHTTPResponse http.ResponseWriter, clientHTTPRequest *ht
 		} // if profileErr != nil {
 		// Write the protobyfBytes of the Profile protobuf structure to the client, in case of ann error inform the client
 		if _, serverHTTPResponseErr := serverHTTPResponse.Write(profile); serverHTTPResponseErr != nil {
-			log.Println(serverHTTPResponseErr)
+			logError(syslog.LOG_ERR, serverHTTPResponseErr)
 			http.Error(serverHTTPResponse, serverHTTPResponseErr.Error(), 500)
 			return
 		} // if _, serverHTTPResponseErr
@@ -136,13 +140,13 @@ func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 	// If the authentication failed,
 	if websocketConnectionRequestAuthErr != nil {
 		// Log a failed authentication attempt
-		log.Println("Authentication Failed:", websocketConnectionRequestAuthErr)
+		logError(syslog.LOG_ERR, websocketConnectionRequestAuthErr)
 		// In case there was a protobuf marshal error, The client would receive an empty []byte and should handle it as an invalid response
 		// Even with an invalid response, the client should still take the hint that his authentication attempt has failed
 		if writeMessageErr := authenticatedClient.sendErrorToClient(); writeMessageErr != nil {
-			log.Println("Error while sending an error to the client:", writeMessageErr)
+			logError(syslog.LOG_ERR, writeMessageErr)
 		} // if writeMessageErr
-		log.Println("Terminating websocket connection to client.")
+		logError(syslog.LOG_INFO, errors.New("terminating websocket connection to client"))
 		// Close the websocket connection
 		websocketConnection.Close()
 		return
@@ -156,8 +160,8 @@ func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 func authenticatedWebsocketConnection(storage storageInterface) {
 	authenticatedClient, authenticatedClientErr := storage.getClientDataFromStorage()
 	if authenticatedClientErr != nil {
-		log.Println(authenticatedClientErr)
-	}
+		logError(syslog.LOG_ERR, authenticatedClientErr)
+	} // if authenticatedClientErr != nil
 	if len(authenticatedClient.messagesToBeDelivered) > 0 {
 		// If there are no errors while deliveing the messages to the client
 		if deliverMessagesErr := authenticatedClient.deliverMessages(authenticatedClient.messagesToBeDelivered); deliverMessagesErr == nil {
@@ -174,12 +178,12 @@ func authenticatedWebsocketConnection(storage storageInterface) {
 	} // for websocketConnectionProcessMessageErr == nil
 	// Once we enounter an error while processing messages from the client
 	// Log the error we encountered
-	log.Println("Error while processing message from the client", websocketConnectionProcessMessageErr)
+	logError(syslog.LOG_ERR, websocketConnectionProcessMessageErr)
 	// If there is an error while sending the error to the client, log the error
 	if writeMessageErr := authenticatedClient.sendErrorToClient(); writeMessageErr != nil {
-		log.Println("Error while sending an error to the client:", writeMessageErr)
+		logError(syslog.LOG_ERR, writeMessageErr)
 	} // if writeMessageErr
-	log.Println("Terminating websocket connection to client.")
+	logError(syslog.LOG_INFO, errors.New("terminating websocket connection to client"))
 	// Close the websocket connection
 	authenticatedClient.websocketConnection.Close()
 	return
@@ -199,7 +203,7 @@ func (a *authenticatedClientFirestore) sendErrorToClient() error {
 	} // if a.encounteredError != nil
 	// If there is an error while marshaling the message structure, log the error and continue with the rest of the function
 	if messageToClientProtobufBytes, messageToClientProtobufBytesErr = golangProto.Marshal(&messageToClientProtobuf); messageToClientProtobufBytesErr != nil {
-		log.Println("Error while marshaling the message to client:", messageToClientProtobufBytesErr)
+		logError(syslog.LOG_ERR, messageToClientProtobufBytesErr)
 	} // if messageToClientProtobufBytes
 	// Returned the marshaled message bytes
 	if writeMessageErr := a.websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientProtobufBytes); writeMessageErr != nil {
@@ -459,3 +463,45 @@ func requestAuth(websocketConnection *gorillaWebSocket.Conn) ([]byte, error) {
 	// If cryptoEd25519.Verify() failed to verify the signature, return a matching reponse
 	return nil, errors.New("Invalid Signature")
 } // func requestAuth
+
+func logError(priority syslog.Priority, err error) {
+	// If the environment variable for the papertrail url is not set
+	if papertrailURL == "" {
+		// Use default logging
+		logDefault(priority, err)
+		return
+	} // if papertrailURL == ""
+	// Establish connection to the remote papertrail url
+	papertrail, papertrailErr := syslog.Dial("udp", papertrailURL, syslog.LOG_EMERG|syslog.LOG_KERN, "panthalassa-chat-backend")
+	// if there is an error, log the error normally and return
+	if papertrailErr != nil {
+		logDefault(syslog.LOG_EMERG, papertrailErr)
+		return
+	}
+	// Use different logging functions depending on the error priority
+	switch priority {
+	case syslog.LOG_EMERG:
+		papertrail.Emerg(err.Error())
+	case syslog.LOG_ALERT:
+		papertrail.Alert(err.Error())
+	case syslog.LOG_CRIT:
+		papertrail.Crit(err.Error())
+	case syslog.LOG_ERR:
+		papertrail.Err(err.Error())
+	case syslog.LOG_WARNING:
+		papertrail.Warning(err.Error())
+	case syslog.LOG_NOTICE:
+		papertrail.Notice(err.Error())
+	case syslog.LOG_INFO:
+		papertrail.Info(err.Error())
+	case syslog.LOG_DEBUG:
+		papertrail.Debug(err.Error())
+	default:
+		papertrail.Err(err.Error())
+	} // switch priority {
+} // func logError
+
+func logDefault(priority syslog.Priority, err error) {
+	// Use default logging
+	log.Println(priority, err)
+}
