@@ -37,6 +37,8 @@ type Client struct {
 func TestHandleWebSocketConnection(t *testing.T) {
 	// Start the websocket server
 	go StartWebSocketServer()
+	// Wait a bit before trying to interact with the backend in hopes that travis wont fail
+	time.Sleep(5 * time.Second)
 	// Create a new static SignedPreKey to make testing easier
 	signedPreKeyReceiver := newStaticSignedPreKeyReceiver()
 	// Create a new static OneTimePreKey to make testing easier
@@ -135,6 +137,7 @@ func getProfileFromBackend(t *testing.T) {
 	// Create a new get request to get a profile from the backend
 	httpRequest, httpRequestErr := http.NewRequest("GET", "http://127.0.0.1:8080/profile", nil)
 	testifyRequire.Nil(t, httpRequestErr)
+
 	// Set bearer auth
 	httpRequest.Header.Set("Bearer", "5d41402abc4b2a76b9719d911017c592")
 	// Set the identityPublicKey of the person who owns the profile
