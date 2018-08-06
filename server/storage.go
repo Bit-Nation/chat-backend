@@ -43,7 +43,11 @@ func newFirestoreConnection() (*firestore.Client, error) {
 	// Initialise an empty context with no values, no deadline, which will never be canceled
 	networkContext := context.Background()
 	// Get the JSON credentials from our own custom enviroment variable to increase compatibility
-	credentialsJSON := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+	credentialsHex := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+	credentialsJSON, hexDecodeErr := hex.DecodeString(credentialsHex)
+	if hexDecodeErr != nil {
+		return nil, hexDecodeErr
+	} // if hexDecodeErr !- nil {
 	// Get the firestore projectID from our custom enviroment variable
 	projectID := os.Getenv("FIRESTORE_PROJECT_ID")
 	// Creaet new config using our credentials
