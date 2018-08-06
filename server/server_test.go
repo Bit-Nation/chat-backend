@@ -37,8 +37,8 @@ type Client struct {
 func TestHandleWebSocketConnection(t *testing.T) {
 	// Start the websocket server
 	go StartWebSocketServer()
-	// Wait a bit before trying to interact with the backend in hopes that travis wont fail
-	time.Sleep(5 * time.Second)
+	// Wait a long time before trying to interact with the backend in hopes that travis wont fail
+	time.Sleep(42 * time.Second)
 	// Create a new static SignedPreKey to make testing easier
 	signedPreKeyReceiver := newStaticSignedPreKeyReceiver()
 	// Create a new static OneTimePreKey to make testing easier
@@ -50,7 +50,7 @@ func TestHandleWebSocketConnection(t *testing.T) {
 		"Earth",
 		"base64",
 		"amazing surprise admit live basic outside people echo fault come interest flat awesome dragon share reason suggest scatter project omit daring business push afford",
-		"ws://localhost:8080/chat",
+		"ws://127.0.0.1:8080/chat",
 		"5d41402abc4b2a76b9719d911017c592",
 		oneTimePreKeysReceiver,
 		signedPreKeyReceiver,
@@ -62,7 +62,7 @@ func TestHandleWebSocketConnection(t *testing.T) {
 		"Earth",
 		"base64",
 		"crunch ahead select guess pledge bundle midnight gossip episode govern brick humor forest age inhale scatter fringe love brief cute since room orange couple",
-		"ws://localhost:8080/chat",
+		"ws://127.0.0.1:8080/chat",
 		"5d41402abc4b2a76b9719d911017c592",
 		[]bitnationX3dh.KeyPair{},
 		bitnationX3dh.KeyPair{},
