@@ -54,7 +54,7 @@ func TestHandleWebSocketConnection(t *testing.T) {
 		"base64",
 		"amazing surprise admit live basic outside people echo fault come interest flat awesome dragon share reason suggest scatter project omit daring business push afford",
 		"ws://127.0.0.1:"+listenPort+"/chat",
-		"5d41402abc4b2a76b9719d911017c592",
+		"super_secure_over_9000",
 		oneTimePreKeysReceiver,
 		signedPreKeyReceiver,
 	)
@@ -66,7 +66,7 @@ func TestHandleWebSocketConnection(t *testing.T) {
 		"base64",
 		"crunch ahead select guess pledge bundle midnight gossip episode govern brick humor forest age inhale scatter fringe love brief cute since room orange couple",
 		"ws://127.0.0.1:"+listenPort+"/chat",
-		"5d41402abc4b2a76b9719d911017c592",
+		"super_secure_over_9000",
 		[]bitnationX3dh.KeyPair{},
 		bitnationX3dh.KeyPair{},
 	)
@@ -88,7 +88,7 @@ func TestHandleWebSocketConnection(t *testing.T) {
 	// Initial message sender sends a message to the backend to get persisted
 	clientSender.testSendMessage(t, remotePreKeyBundlePublic)
 	// Receiver reconnects
-	reconnectedWebSocketConnection := newWebSocketConnection(t, "ws://127.0.0.1:"+listenPort+"/chat", "5d41402abc4b2a76b9719d911017c592")
+	reconnectedWebSocketConnection := newWebSocketConnection(t, "ws://127.0.0.1:"+listenPort+"/chat", "super_secure_over_9000")
 	// We replace the disconnection connection with the re-established websocket connection
 	clientReceiver.WebSocketConnection = reconnectedWebSocketConnection
 	// Receiver needs to pass auth again
@@ -114,7 +114,7 @@ func putProfileOnBackend(t *testing.T) {
 	httpRequest, httpRequestErr := http.NewRequest("PUT", "http://127.0.0.1:"+listenPort+"/profile", profileBase64)
 	testifyRequire.Nil(t, httpRequestErr)
 	// Set bearer auth
-	httpRequest.Header.Set("Bearer", "5d41402abc4b2a76b9719d911017c592")
+	httpRequest.Header.Set("Bearer", "super_secure_over_9000")
 	// Set the identityPublicKey of the person who owns the profile
 	httpRequest.Header.Set("Identity", "22cfd1af5798544287cbf7721a0a4ebc2506d6f4df05413355a7f5cc86740724")
 	// Set the content type
@@ -146,7 +146,7 @@ func getProfileFromBackend(t *testing.T) {
 	testifyRequire.Nil(t, httpRequestErr)
 
 	// Set bearer auth
-	httpRequest.Header.Set("Bearer", "5d41402abc4b2a76b9719d911017c592")
+	httpRequest.Header.Set("Bearer", "super_secure_over_9000")
 	// Set the identityPublicKey of the person who owns the profile
 	httpRequest.Header.Set("Identity", "22cfd1af5798544287cbf7721a0a4ebc2506d6f4df05413355a7f5cc86740724")
 	// Set the content type
