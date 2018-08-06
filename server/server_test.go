@@ -38,7 +38,7 @@ func TestHandleWebSocketConnection(t *testing.T) {
 	// Start the websocket server
 	go StartWebSocketServer()
 	// Wait a long time before trying to interact with the backend in hopes that travis wont fail
-	time.Sleep(42 * time.Second)
+	//time.Sleep(42 * time.Second)
 	// Create a new static SignedPreKey to make testing easier
 	signedPreKeyReceiver := newStaticSignedPreKeyReceiver()
 	// Create a new static OneTimePreKey to make testing easier
@@ -180,7 +180,11 @@ func newWebSocketConnection(t *testing.T, websocketURL, bearer string) *gorillaW
 	// Initialize a websocket dialer
 	websocketDialer := gorillaWebSocket.Dialer{}
 	// Initialize a websocket connection of a message sender
-	websocketConnection, _, websocketConnectionErr := websocketDialer.Dial(websocketURL, customHeaders)
+	websocketConnection, websocketConnectionResponse, websocketConnectionErr := websocketDialer.Dial(websocketURL, customHeaders)
+	// Read the response from the websocket package which should contain debug info in case of error
+	websocketConnectionResponseBody, readErr := ioutil.ReadAll(websocketConnectionResponse.Body)
+	testifyRequire.Nil(t, readErr)
+	testifyRequire.Equal(t, []byte{}, websocketConnectionResponseBody)
 	testifyRequire.Nil(t, websocketConnectionErr)
 	return websocketConnection
 }
