@@ -39,8 +39,10 @@ func StartWebSocketServer() {
 
 // HandleProfile decides what happens when a client requests or uploads a profile
 func HandleProfile(serverHTTPResponse http.ResponseWriter, clientHTTPRequest *http.Request) {
+	// Get bearer token from environment variable
+	bearerToken := os.Getenv("BEARER")
 	// Make sure the client passes the bearer authentication
-	if clientHTTPRequest.Header.Get("Bearer") != "5d41402abc4b2a76b9719d911017c592" {
+	if clientHTTPRequest.Header.Get("Bearer") != bearerToken {
 		http.Error(serverHTTPResponse, "Forbidden", 403)
 		return
 	} // if clientHTTPRequest.Header.Get("Bearer")
@@ -113,9 +115,11 @@ func HandleProfile(serverHTTPResponse http.ResponseWriter, clientHTTPRequest *ht
 
 // HandleWebSocketConnection decides what happens when a client establishes a websocket connection to the server
 func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTTPRequest *http.Request) {
+	// Get bearer token from environment variable
+	bearerToken := os.Getenv("BEARER")
 	// Allow only requests which contain the specific Bearer header
 	// Allow only GET requests
-	if clientHTTPRequest.Header.Get("Bearer") != "5d41402abc4b2a76b9719d911017c592" || clientHTTPRequest.Method != "GET" {
+	if clientHTTPRequest.Header.Get("Bearer") != bearerToken || clientHTTPRequest.Method != "GET" {
 		// If a client is missing the Bearer header or is using a different method than GET return a Forbidden error
 		http.Error(serverHTTPResponse, "Forbidden", 403)
 		return
