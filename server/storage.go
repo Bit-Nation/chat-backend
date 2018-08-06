@@ -7,12 +7,16 @@ import (
 	"errors"
 	"fmt"
 	"log/syslog"
+	"os"
 
+	datastore "cloud.google.com/go/datastore"
 	firestore "cloud.google.com/go/firestore"
 	firebase "firebase.google.com/go"
 	backendProtobuf "github.com/Bit-Nation/protobuffers"
 	golangProto "github.com/golang/protobuf/proto"
 	gorillaWebSocket "github.com/gorilla/websocket"
+	google "golang.org/x/oauth2/google"
+	option "google.golang.org/api/option"
 )
 
 // Use interface for storage to make it easily swappable
@@ -38,8 +42,19 @@ type authenticatedClientFirestore struct {
 func newFirestoreConnection() (*firestore.Client, error) {
 	// Initialise an empty context with no values, no deadline, which will never be canceled
 	networkContext := context.Background()
-	// Initialise a new firebase application using the context
-	firebaseApp, firebaseAppErr := firebase.NewApp(networkContext, nil)
+	// Get the JSON credentials from our own custom enviroment variable to increase compatibility
+	credentialsJSON := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+	// Get the firestore projectID from our custom enviroment variable
+	projectID := os.Getenv("FIRESTORE_PROJECT_ID")
+	// Creaet new config using our credentials
+	jwtConfig, jwtConfigErr := google.JWTConfigFromJSON([]byte(credentialsJSON), datastore.ScopeDatastore)
+	if jwtConfigErr != nil {
+		return nil, jwtConfigErr
+	} // if jwtConfigErr != nil
+	// Create a new token source from the config
+	tokenSource := jwtConfig.TokenSource(networkContext)
+	// Initialise a new firebase application using the context and the token source
+	firebaseApp, firebaseAppErr := firebase.NewApp(networkContext, &firebase.Config{ProjectID: projectID}, option.WithTokenSource(tokenSource))
 	if firebaseAppErr != nil {
 		return nil, firebaseAppErr
 	} // if firebaseAppErr != nil
