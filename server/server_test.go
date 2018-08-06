@@ -115,6 +115,11 @@ func putProfileOnBackend(t *testing.T) {
 	// Make the http request
 	backendResponse, backendResponseErr := http.DefaultClient.Do(httpRequest)
 	testifyRequire.Nil(t, backendResponseErr)
+	// If there is a more descriptive error, it will be contained in the response body
+	backendResponseBody, readErr := ioutil.ReadAll(backendResponse.Body)
+	testifyRequire.Nil(t, readErr)
+	// An empty response body means all is well
+	testifyRequire.Equal(t, []byte{}, backendResponseBody)
 	// Make sure that all went well
 	testifyRequire.Equal(t, "200 OK", backendResponse.Status)
 	defer backendResponse.Body.Close()
