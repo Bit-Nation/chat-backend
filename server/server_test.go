@@ -70,7 +70,9 @@ func TestHandleWebSocketConnection(t *testing.T) {
 		[]bitnationX3dh.KeyPair{},
 		bitnationX3dh.KeyPair{},
 	)
+	// Upload a profile on the backend
 	putProfileOnBackend(t)
+	// Retreive a profile from the backend
 	getProfileFromBackend(t)
 	// Reciever needs to pass authentication
 	clientReceiver.testAuth(t)
