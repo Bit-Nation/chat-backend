@@ -4,8 +4,7 @@ import (
 	server "github.com/Bit-Nation/chat-backend/server"
 )
 
-func main()  {
-
+func main() {
 	server.StartWebSocketServer()
-	
+
 }

@@ -37,8 +37,8 @@ type Client struct {
 func TestHandleWebSocketConnection(t *testing.T) {
 	// Start the websocket server
 	go StartWebSocketServer()
-	// Wait a long time before trying to interact with the backend in hopes that travis wont fail
-	//time.Sleep(42 * time.Second)
+	// Wait just a bit for the web socket to actually initialise before trying to connect to it
+	time.Sleep(1 * time.Second)
 	// Create a new static SignedPreKey to make testing easier
 	signedPreKeyReceiver := newStaticSignedPreKeyReceiver()
 	// Create a new static OneTimePreKey to make testing easier

@@ -30,6 +30,7 @@ func StartWebSocketServer() {
 	// Bind an endpoint path to handleWebSocketConnection
 	gorillaRouter.HandleFunc("/chat", HandleWebSocketConnection)
 	gorillaRouter.HandleFunc("/profile", HandleProfile)
+
 	// Listen on a specific port for incoming connections
 	if listenAndServeErr := http.ListenAndServe(":8080", gorillaRouter); listenAndServeErr != nil {
 		// If there is an error while setting up, panic and show us the error
