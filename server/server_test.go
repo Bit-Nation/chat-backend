@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -35,6 +36,8 @@ type Client struct {
 }
 
 func TestHandleWebSocketConnection(t *testing.T) {
+	// Get the port on which the chat backend should be listening on
+	listenPort := os.Getenv("PORT")
 	// Start the websocket server
 	go StartWebSocketServer()
 	// Wait just a bit for the web socket to actually initialise before trying to connect to it
@@ -50,7 +53,7 @@ func TestHandleWebSocketConnection(t *testing.T) {
 		"Earth",
 		"base64",
 		"amazing surprise admit live basic outside people echo fault come interest flat awesome dragon share reason suggest scatter project omit daring business push afford",
-		"ws://127.0.0.1:8080/chat",
+		"ws://127.0.0.1:"+listenPort+"/chat",
 		"5d41402abc4b2a76b9719d911017c592",
 		oneTimePreKeysReceiver,
 		signedPreKeyReceiver,
@@ -62,7 +65,7 @@ func TestHandleWebSocketConnection(t *testing.T) {
 		"Earth",
 		"base64",
 		"crunch ahead select guess pledge bundle midnight gossip episode govern brick humor forest age inhale scatter fringe love brief cute since room orange couple",
-		"ws://127.0.0.1:8080/chat",
+		"ws://127.0.0.1:"+listenPort+"/chat",
 		"5d41402abc4b2a76b9719d911017c592",
 		[]bitnationX3dh.KeyPair{},
 		bitnationX3dh.KeyPair{},
@@ -85,7 +88,7 @@ func TestHandleWebSocketConnection(t *testing.T) {
 	// Initial message sender sends a message to the backend to get persisted
 	clientSender.testSendMessage(t, remotePreKeyBundlePublic)
 	// Receiver reconnects
-	reconnectedWebSocketConnection := newWebSocketConnection(t, "ws://127.0.0.1:8080/chat", "5d41402abc4b2a76b9719d911017c592")
+	reconnectedWebSocketConnection := newWebSocketConnection(t, "ws://127.0.0.1:"+listenPort+"/chat", "5d41402abc4b2a76b9719d911017c592")
 	// We replace the disconnection connection with the re-established websocket connection
 	clientReceiver.WebSocketConnection = reconnectedWebSocketConnection
 	// Receiver needs to pass auth again
@@ -103,10 +106,12 @@ func TestHandleWebSocketConnection(t *testing.T) {
 
 // Test persisting a static profile to the backend
 func putProfileOnBackend(t *testing.T) {
+	// Get the port on which the chat backend should be listening on
+	listenPort := os.Getenv("PORT")
 	// Use an already base64 encoded Profile protobuf bytes to make testing simpler
 	profileBase64 := strings.NewReader(`CgNCb2ISBUVhcnRoGgZiYXNlNjQiICLP0a9XmFRCh8v3choKTrwlBtb03wVBM1Wn9cyGdAckKiECcFb7RfrdatrDp9TlXw1/nNU/cF1hoxaMCoEPY1a7c8QyIH7ffl1cs/4+0WzRS7j7c+Y2/moLUj0iLxgLKbqakcphOLTasdoFQAJKQDztvodZmPkxuEBra1RGXsMsyirTIajSuaN4rOoNMkOPB/8+RXFZKVOhkjkNTsSW+WU7dYExiaxC8Wi7KVOB5wNSQaxE7LN3oNBk1GUkmyYFaN5fWrYmTDe9iz39gWH6/gCLVuFwA1g4RpMnNoiD0rdIC+9AL6gUC8XMQKZuuKOY/QcB`)
 	// Create a new PUT request to put the profile in the storage
-	httpRequest, httpRequestErr := http.NewRequest("PUT", "http://127.0.0.1:8080/profile", profileBase64)
+	httpRequest, httpRequestErr := http.NewRequest("PUT", "http://127.0.0.1:"+listenPort+"/profile", profileBase64)
 	testifyRequire.Nil(t, httpRequestErr)
 	// Set bearer auth
 	httpRequest.Header.Set("Bearer", "5d41402abc4b2a76b9719d911017c592")
@@ -129,13 +134,15 @@ func putProfileOnBackend(t *testing.T) {
 
 // Test getting an already persisted profile from the backend
 func getProfileFromBackend(t *testing.T) {
+	// Get the port on which the chat backend should be listening on
+	listenPort := os.Getenv("PORT")
 	// Use an already base64 encoded Profile protobuf bytes to make testing simpler
 	profileBase64 := `CgNCb2ISBUVhcnRoGgZiYXNlNjQiICLP0a9XmFRCh8v3choKTrwlBtb03wVBM1Wn9cyGdAckKiECcFb7RfrdatrDp9TlXw1/nNU/cF1hoxaMCoEPY1a7c8QyIH7ffl1cs/4+0WzRS7j7c+Y2/moLUj0iLxgLKbqakcphOLTasdoFQAJKQDztvodZmPkxuEBra1RGXsMsyirTIajSuaN4rOoNMkOPB/8+RXFZKVOhkjkNTsSW+WU7dYExiaxC8Wi7KVOB5wNSQaxE7LN3oNBk1GUkmyYFaN5fWrYmTDe9iz39gWH6/gCLVuFwA1g4RpMnNoiD0rdIC+9AL6gUC8XMQKZuuKOY/QcB`
 	// Decode the base64 and get the pure Profile protobuf bytes
 	profileProtobufBytes, profileProtobufErr := base64.StdEncoding.DecodeString(profileBase64)
 	testifyRequire.Nil(t, profileProtobufErr)
 	// Create a new get request to get a profile from the backend
-	httpRequest, httpRequestErr := http.NewRequest("GET", "http://127.0.0.1:8080/profile", nil)
+	httpRequest, httpRequestErr := http.NewRequest("GET", "http://127.0.0.1:"+listenPort+"/profile", nil)
 	testifyRequire.Nil(t, httpRequestErr)
 
 	// Set bearer auth

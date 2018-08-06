@@ -25,6 +25,8 @@ var papertrailURL = os.Getenv("PAPERTRAIL")
 
 // StartWebSocketServer starts the websocket server
 func StartWebSocketServer() {
+	// Get the port on which the chat backend should be listening on
+	listenPort := os.Getenv("PORT")
 	// Create new gorillaRouter
 	gorillaRouter := gorillaMux.NewRouter()
 	// Bind an endpoint path to handleWebSocketConnection
@@ -32,7 +34,7 @@ func StartWebSocketServer() {
 	gorillaRouter.HandleFunc("/profile", HandleProfile)
 
 	// Listen on a specific port for incoming connections
-	if listenAndServeErr := http.ListenAndServe(":8080", gorillaRouter); listenAndServeErr != nil {
+	if listenAndServeErr := http.ListenAndServe(":"+listenPort, gorillaRouter); listenAndServeErr != nil {
 		// If there is an error while setting up, panic and show us the error
 		logError(syslog.LOG_CRIT, listenAndServeErr)
 	} // if listenAndServeErr
