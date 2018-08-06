@@ -12,6 +12,7 @@ import (
 	"log/syslog"
 	"net/http"
 	"os"
+	"time"
 
 	profile "github.com/Bit-Nation/panthalassa/profile"
 	backendProtobuf "github.com/Bit-Nation/protobuffers"
@@ -162,6 +163,7 @@ func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 	authenticatedClient.authenticatedIdentityPublicKeyHex = hex.EncodeToString(authenticatedIdentityPublicKeyClient)
 	// Continue in the scope of the authenticatedWebsocketConnection to allow for easier testing
 	authenticatedWebsocketConnection(&authenticatedClient)
+	// Wait some in case things are still using resources
 } // func handleWebSocketConnection
 
 func authenticatedWebsocketConnection(storage storageInterface) {
@@ -172,7 +174,13 @@ func authenticatedWebsocketConnection(storage storageInterface) {
 	if len(authenticatedClient.messagesToBeDelivered) > 0 {
 		// If there are no errors while deliveing the messages to the client
 		if deliverMessagesErr := authenticatedClient.deliverMessages(authenticatedClient.messagesToBeDelivered); deliverMessagesErr == nil {
-			authenticatedClient.deleteFieldFromStorage("chatMessages", "")
+			// If there are no errors while deleteing the messages which were delivered
+			if deleteFromFieldErr := authenticatedClient.deleteFieldFromStorage("chatMessages", ""); deleteFromFieldErr != nil {
+				// @TODO fix this wait here
+				time.Sleep(time.Second)
+				logDefault(syslog.LOG_ERR, deleteFromFieldErr)
+			} // if deleteFromFieldErr
+
 		} // if deliverMessagesErr == nil
 	} // if len(messagesToBeDelivered > 0)
 
@@ -274,6 +282,7 @@ func (a *authenticatedClientFirestore) processMessage() error {
 		switch {
 		case messageFromClientProtobuf.Response.Auth != nil:
 			return errors.New("Authentication should not be handled here")
+
 		case messageFromClientProtobuf.Response.OneTimePrekeys != nil:
 			return a.persistOneTimePreKeysFromClient(messageFromClientProtobuf.Response.OneTimePrekeys)
 		case messageFromClientProtobuf.Response.PreKeyBundle != nil:

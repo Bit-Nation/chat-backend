@@ -430,6 +430,7 @@ func (c *Client) testRequestPreKeyBundle(t *testing.T, preKeyBundleIdentifier []
 	preKeyBundleFromBackend := responseFromBackend.PreKeyBundle
 	// Get the OneTimePreKey from the received pre key bundle
 	oneTimePreKeyFromBackend := preKeyBundleFromBackend.OneTimePreKey
+
 	// Get the SignedPreKey from the received pre key bundle
 	signedPreKeyFromBackend := preKeyBundleFromBackend.SignedPreKey
 	// Get the Profile from the received pre key bundle
