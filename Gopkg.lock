@@ -490,7 +490,6 @@
     "github.com/stretchr/testify/require",
     "github.com/tiabc/doubleratchet",
     "golang.org/x/crypto/ed25519",
-    "google.golang.org/api/option",
   ]
   solver-name = "gps-cdcl"
   solver-version = 1
