@@ -105,7 +105,7 @@ func HandleProfile(serverHTTPResponse http.ResponseWriter, clientHTTPRequest *ht
 			return
 		}
 		// Persist the base64 representation of the Profile protobuf structure bytes, in case of an error inform the client, othterwise inform that it's ok
-		if persistProfileToStorageErr := persistProfileToStorage(clientHTTPRequest.Header.Get("Identity"), profileBase64String); persistProfileToStorageErr != nil {
+		if persistProfileToStorageErr := persistProfileToStorage(hex.EncodeToString(profileObject.Information.IdentityPubKey), profileBase64String); persistProfileToStorageErr != nil {
 			http.Error(serverHTTPResponse, persistProfileToStorageErr.Error(), 500)
 		} else {
 			// Inform the client that everything is ok
