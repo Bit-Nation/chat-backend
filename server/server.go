@@ -176,11 +176,16 @@ func authenticatedWebsocketConnection(storage storageInterface) {
 		if deliverMessagesErr := authenticatedClient.deliverMessages(authenticatedClient.messagesToBeDelivered); deliverMessagesErr == nil {
 			// If there are no errors while deleteing the messages which were delivered
 			if deleteFromFieldErr := authenticatedClient.deleteFieldFromStorage("chatMessages", ""); deleteFromFieldErr != nil {
-				// @TODO fix this wait here
-				time.Sleep(time.Second)
 				logDefault(syslog.LOG_ERR, deleteFromFieldErr)
+				// @TODO find a better way to do this
+				// Try one more time to delete it,
+				if deleteFromFieldErr := authenticatedClient.deleteFieldFromStorage("chatMessages", ""); deleteFromFieldErr != nil {
+					logDefault(syslog.LOG_ERR, deleteFromFieldErr)
+				} // if deleteFromFieldErr inner
 			} // if deleteFromFieldErr
-
+			// @TODO find a better way to do this
+			// Wait a bit so that the message deletition propagates correctly
+			time.Sleep(2 * time.Second)
 		} // if deliverMessagesErr == nil
 	} // if len(messagesToBeDelivered > 0)
 
