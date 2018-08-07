@@ -61,7 +61,7 @@ func HandleProfile(serverHTTPResponse http.ResponseWriter, clientHTTPRequest *ht
 			return
 		} // if profileErr != nil {
 		// Write the protobyfBytes of the Profile protobuf structure to the client, in case of ann error inform the client
-		if _, serverHTTPResponseErr := serverHTTPResponse.Write(profile); serverHTTPResponseErr != nil {
+		if _, serverHTTPResponseErr := serverHTTPResponse.Write([]byte(base64.StdEncoding.EncodeToString(profile))); serverHTTPResponseErr != nil {
 			logError(syslog.LOG_ERR, serverHTTPResponseErr)
 			http.Error(serverHTTPResponse, serverHTTPResponseErr.Error(), 500)
 			return

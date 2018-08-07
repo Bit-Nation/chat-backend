@@ -156,11 +156,14 @@ func getProfileFromBackend(t *testing.T) {
 	// Make the http request
 	backendResponse, backendResponseErr := http.DefaultClient.Do(httpRequest)
 	testifyRequire.Nil(t, backendResponseErr)
-	// Read the pure Profile protobuf bytes from the backend
-	profile, readErr := ioutil.ReadAll(backendResponse.Body)
+	// Read the base64 Profile protobuf bytes from the backend
+	profileBackendBase64, readErr := ioutil.ReadAll(backendResponse.Body)
 	testifyRequire.Nil(t, readErr)
-	// Make sure that the base64 decoded bytes are the same with the pure Profile protobuf bytes that the backend returns
-	testifyRequire.Equal(t, profileProtobufBytes, profile)
+	// Decode the base64 Profile protobuf bytes to get the actual Profile protobuf bytes
+	profileBackend, profileErr := base64.StdEncoding.DecodeString(string(profileBackendBase64))
+	testifyRequire.Nil(t, profileErr)
+	// Make sure that the base64 decoded bytes are the same with the base64 decoded Profile protobuf bytes that the backend returns
+	testifyRequire.Equal(t, profileProtobufBytes, profileBackend)
 	// Close the response body after the function ends
 	defer backendResponse.Body.Close()
 } // func getProfileFromBackend(t *testing.T)
