@@ -21,6 +21,7 @@ import (
 	bitnationX3dh "github.com/Bit-Nation/x3dh"
 	golangProto "github.com/golang/protobuf/proto"
 	gorillaWebSocket "github.com/gorilla/websocket"
+	uuid "github.com/satori/go.uuid"
 	testifyRequire "github.com/stretchr/testify/require"
 	tiabcDoubleratchet "github.com/tiabc/doubleratchet"
 	cryptoEd25519 "golang.org/x/crypto/ed25519"
@@ -375,8 +376,10 @@ func (c *Client) testSendMessage(t *testing.T, receiverPreKeyBundlePublic PreKey
 	chatMessageSender.Receiver = []byte(receiverPreKeyBundlePublic.BundleIdentityKey)
 	// Set the message sender to the message Sender IdentityKey
 	chatMessageSender.Sender = []byte(identityPublicKeySenderHex)
+	// Create a new message id
+	messageID := uuid.NewV4()
 	// Set the message ID
-	chatMessageSender.MessageID = []byte("@TODO_MESSAGEID")
+	chatMessageSender.MessageID = []byte(messageID.String())
 	// Set the used shared secret, (not in plain form)
 	chatMessageSender.UsedSharedSecret = []byte("@TODO")
 	// Set the version
