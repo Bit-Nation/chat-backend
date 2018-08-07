@@ -5,10 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"io"
 	"io/ioutil"
+	"log/syslog"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -59,6 +62,17 @@ func TestHandleWebSocketConnection(t *testing.T) {
 		oneTimePreKeysReceiver,
 		signedPreKeyReceiver,
 	)
+	clientReceiverRestartedApp := newClient(
+		t,
+		"Receiver",
+		"Earth",
+		"base64",
+		"amazing surprise admit live basic outside people echo fault come interest flat awesome dragon share reason suggest scatter project omit daring business push afford",
+		"ws://127.0.0.1:"+listenPort+"/chat",
+		"super_secure_over_9000",
+		oneTimePreKeysReceiver,
+		signedPreKeyReceiver,
+	)
 	// Create a new client sender
 	clientSender := newClient(
 		t,
@@ -90,21 +104,22 @@ func TestHandleWebSocketConnection(t *testing.T) {
 	remotePreKeyBundlePublic := clientSender.testRequestPreKeyBundle(t, identityPublicKeyBytes)
 	// Initial message sender sends a message to the backend to get persisted
 	clientSender.testSendMessage(t, remotePreKeyBundlePublic)
-	// Receiver reconnects
-	reconnectedWebSocketConnection := newWebSocketConnection(t, "ws://127.0.0.1:"+listenPort+"/chat", "super_secure_over_9000")
-	// We replace the disconnection connection with the re-established websocket connection
-	clientReceiver.WebSocketConnection = reconnectedWebSocketConnection
 	// Receiver needs to pass auth again
-	clientReceiver.testAuth(t)
+	clientReceiverRestartedApp.testAuth(t)
 	// Receiver receives any undelivered messages while he was offline
-	unreadChatMessages := clientReceiver.receiveUndeliveredMessages(t)
+	unreadChatMessages := clientReceiverRestartedApp.receiveUndeliveredMessages(t)
 	// Test if we can decrypt the message successfully
 	expectedDecryptedMessages := []string{"SECRETMESSAGENEW1"}
 	// For each message that we want to read
 	for index, unreadChatMessage := range unreadChatMessages {
 		// Try to decrypt them and read them
-		clientReceiver.testReadDoubleRatchetMessages(t, unreadChatMessage, expectedDecryptedMessages[index])
+		clientReceiverRestartedApp.testReadDoubleRatchetMessages(t, unreadChatMessage, expectedDecryptedMessages[index])
+		if production == "" {
+			logError(syslog.LOG_INFO, errors.New(hex.EncodeToString(clientReceiverRestartedApp.Profile.Information.IdentityPubKey)+" Successfully decrypted and read messages : "+strconv.Itoa(index+1)))
+		} // if production == ""
 	} // for index, unreadChatMessage
+	// Leave some time for the background tasks to finish
+	time.Sleep(30 * time.Second)
 } // func TestHandleWebSocketConnection
 
 // Test persisting a static profile to the backend
@@ -291,6 +306,9 @@ func (c *Client) testUploadSignedPreKey(t *testing.T) {
 	preKeyProtobuf.Key = c.SignedPreKey.PublicKey[:]
 	// Set the IdentityKey in PreKey structure to the IdentityPubKey in the Client profile
 	preKeyProtobuf.IdentityKey = c.Profile.Information.IdentityPubKey
+	// Set a fix timestamp of the signedPreKey
+	// @TODO find out if this timestamp is fixed and related to signedPreKey creation time
+	preKeyProtobuf.TimeStamp = time.Now().UnixNano()
 	// Sign the IdentityKey with the KeyManager of the client
 	identityKeySignature, identityKeySignatureErr := c.KeyManager.IdentitySign(preKeyProtobuf.IdentityKey)
 	testifyRequire.Nil(t, identityKeySignatureErr)

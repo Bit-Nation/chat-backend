@@ -12,7 +12,7 @@ import (
 	"log/syslog"
 	"net/http"
 	"os"
-	"time"
+	"strconv"
 
 	profile "github.com/Bit-Nation/panthalassa/profile"
 	backendProtobuf "github.com/Bit-Nation/protobuffers"
@@ -23,6 +23,7 @@ import (
 )
 
 var papertrailURL = os.Getenv("PAPERTRAIL")
+var production = os.Getenv("PRODUCTION")
 
 // StartWebSocketServer starts the websocket server
 func StartWebSocketServer() {
@@ -161,6 +162,10 @@ func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 	} // if websocketConnectionRequestAuthErr != nil
 	// Only set the authenticatedIdentityPublicKeyHex once authentication has been successful
 	authenticatedClient.authenticatedIdentityPublicKeyHex = hex.EncodeToString(authenticatedIdentityPublicKeyClient)
+	// If it's a dev enviroment, log verbose info
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New(authenticatedClient.authenticatedIdentityPublicKeyHex+" Auth Successful"))
+	} // if production == ""
 	// Continue in the scope of the authenticatedWebsocketConnection to allow for easier testing
 	authenticatedWebsocketConnection(&authenticatedClient)
 	// Wait some in case things are still using resources
@@ -171,34 +176,42 @@ func authenticatedWebsocketConnection(storage storageInterface) {
 	if authenticatedClientErr != nil {
 		logError(syslog.LOG_ERR, authenticatedClientErr)
 	} // if authenticatedClientErr != nil
+	// If it's a dev enviroment, log verbose info
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New(authenticatedClient.authenticatedIdentityPublicKeyHex+" Undelivered messages : "+strconv.Itoa(len(authenticatedClient.messagesToBeDelivered))))
+	} // if production == ""
 	if len(authenticatedClient.messagesToBeDelivered) > 0 {
 		// If there are no errors while deliveing the messages to the client
 		if deliverMessagesErr := authenticatedClient.deliverMessages(authenticatedClient.messagesToBeDelivered); deliverMessagesErr == nil {
 			// If there are no errors while deleteing the messages which were delivered
+			// If it's a dev enviroment, log verbose info
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(authenticatedClient.authenticatedIdentityPublicKeyHex+" Receiving Messages : "+strconv.Itoa(len(authenticatedClient.messagesToBeDelivered))))
+			} // if production == ""
 			if deleteFromFieldErr := authenticatedClient.deleteFieldFromStorage("chatMessages", ""); deleteFromFieldErr != nil {
-				logDefault(syslog.LOG_ERR, deleteFromFieldErr)
-				// @TODO find a better way to do this
-				// Try one more time to delete it,
-				if deleteFromFieldErr := authenticatedClient.deleteFieldFromStorage("chatMessages", ""); deleteFromFieldErr != nil {
-					logDefault(syslog.LOG_ERR, deleteFromFieldErr)
-				} // if deleteFromFieldErr inner
+				logError(syslog.LOG_ERR, deleteFromFieldErr)
 			} // if deleteFromFieldErr
-			// @TODO find a better way to do this
-			// Wait a bit so that the message deletition propagates correctly
-			time.Sleep(2 * time.Second)
+			// If it's a dev enviroment, log verbose info
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(authenticatedClient.authenticatedIdentityPublicKeyHex+" Deleting Messages : "+strconv.Itoa(len(authenticatedClient.messagesToBeDelivered))))
+			} // if production == ""
 		} // if deliverMessagesErr == nil
 	} // if len(messagesToBeDelivered > 0)
-
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New(authenticatedClient.authenticatedIdentityPublicKeyHex+" Waiting for client event"))
+	} // if production == "")
 	// Try to process a message from the client
-	websocketConnectionProcessMessageErr := authenticatedClient.processMessage()
+	processedEvents := 0
+	websocketConnectionprocessEventErr := authenticatedClient.processEvent(processedEvents)
 	// For as long as we don't enounter an error while processing messages from the client
-	for websocketConnectionProcessMessageErr == nil {
+	for websocketConnectionprocessEventErr == nil {
 		// Process messages from the client
-		websocketConnectionProcessMessageErr = authenticatedClient.processMessage()
-	} // for websocketConnectionProcessMessageErr == nil
+		processedEvents++
+		websocketConnectionprocessEventErr = authenticatedClient.processEvent(processedEvents)
+	} // for websocketConnectionprocessEventErr == nil
 	// Once we enounter an error while processing messages from the client
 	// Log the error we encountered
-	logError(syslog.LOG_ERR, websocketConnectionProcessMessageErr)
+	logError(syslog.LOG_ERR, websocketConnectionprocessEventErr)
 	// If there is an error while sending the error to the client, log the error
 	if writeMessageErr := authenticatedClient.sendErrorToClient(); writeMessageErr != nil {
 		logError(syslog.LOG_ERR, writeMessageErr)
@@ -233,7 +246,7 @@ func (a *authenticatedClientFirestore) sendErrorToClient() error {
 	return nil
 } // func sendErrorToClient
 
-func (a *authenticatedClientFirestore) processMessage() error {
+func (a *authenticatedClientFirestore) processEvent(eventsProcessed int) error {
 	// Initialize an empty variable to hold the protobuf message
 	var messageFromClientProtobuf backendProtobuf.BackendMessage
 	// Read a message from a client over the websocket connection
@@ -245,7 +258,11 @@ func (a *authenticatedClientFirestore) processMessage() error {
 			return readMessageErr
 		}
 		return nil
-	}
+	} // if readMessageErr != nil
+	// If it's a dev enviroment, log verbose info
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Processing client event number : "+strconv.Itoa(eventsProcessed)))
+	} // if production == "")
 	// Unmarshal the protobuf bytes from the message we received into our protobuf message structure
 	if protoUnmarshalErr := golangProto.Unmarshal(messageFromClientBytes, &messageFromClientProtobuf); protoUnmarshalErr != nil {
 		return protoUnmarshalErr
@@ -266,6 +283,17 @@ func (a *authenticatedClientFirestore) processMessage() error {
 		switch {
 		case messageFromClientProtobuf.Request.Messages != nil:
 			persistChatMessagesFromClientErr := a.persistChatMessagesFromClient(messageFromClientProtobuf.Request.Messages)
+			// If there was no error while persisting the messages
+			if persistChatMessagesFromClientErr == nil {
+				// For each message that was persisted
+				for _, singleMessageFromClient := range messageFromClientProtobuf.Request.Messages {
+					// If we are in dev mode, log each persisted event
+					if production == "" {
+						logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Persisted message meant for : "+hex.EncodeToString(singleMessageFromClient.Receiver)))
+					} // if production == ""
+				} // for singleMessageFromClient := range messageFromClientProtobuf.Request.Messages {
+			} // persistChatMessagesFromClientErr
+			// If there is an error while reading the message from client
 			return persistChatMessagesFromClientErr
 		// @TODO wait for @Gross input on message states
 		case messageFromClientProtobuf.Request.MessageStateChange != nil:
@@ -273,8 +301,18 @@ func (a *authenticatedClientFirestore) processMessage() error {
 		case messageFromClientProtobuf.Request.NewOneTimePreKeys != 0:
 			return errors.New("Only backend is allowed to request NewOneTimePreKeys")
 		case messageFromClientProtobuf.Request.PreKeyBundle != nil:
-			usedOneTimePreKey, deliverRequestedPreKeyBundleErr := a.deliverRequestedPreKeyBundle(messageFromClientProtobuf.Request.PreKeyBundle)
+			// Create a new instance of authenticatedClientFirestore to assist us with fetching the requested preKeyBundle
+			authenticatedClientForPreKeyBundle := authenticatedClientFirestore{}
+			// Use the already existing websocket connection which is expecting a respond to their request for the preKeyBundle
+			authenticatedClientForPreKeyBundle.websocketConnection = a.websocketConnection
+			// Requesting a pre key bundle consumes a oneTimePreKey thus we note it down
+			usedOneTimePreKey, deliverRequestedPreKeyBundleErr := authenticatedClientForPreKeyBundle.deliverRequestedPreKeyBundle(messageFromClientProtobuf.Request.PreKeyBundle)
+			// If there was no error while delivering the preKeyBundle, delete the consumed oneTimePreKey
 			if deliverRequestedPreKeyBundleErr == nil {
+				if production == "" {
+					logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Delivered preKeyBundle which belongs to : "+hex.EncodeToString(messageFromClientProtobuf.Request.PreKeyBundle)))
+					logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Deleted consumed oneTimePreKey with id : "+usedOneTimePreKey+" which belongs to : "+hex.EncodeToString(messageFromClientProtobuf.Request.PreKeyBundle)))
+				} // if production == ""
 				a.deleteFieldFromStorage("oneTimePreKeys", usedOneTimePreKey)
 			} // if deliverRequestedPreKeyBundleErr
 			return deliverRequestedPreKeyBundleErr
@@ -289,11 +327,28 @@ func (a *authenticatedClientFirestore) processMessage() error {
 			return errors.New("Authentication should not be handled here")
 
 		case messageFromClientProtobuf.Response.OneTimePrekeys != nil:
-			return a.persistOneTimePreKeysFromClient(messageFromClientProtobuf.Response.OneTimePrekeys)
+			persistOneTimePreKeysFromClientErr := a.persistOneTimePreKeysFromClient(messageFromClientProtobuf.Response.OneTimePrekeys)
+			// If no error was encountered while persisting the oneTimePreKeys from the client
+			if persistOneTimePreKeysFromClientErr == nil {
+				// If we are not in a production environment, verbose log each oneTimePreKey persistance
+				if production == "" {
+					for _, oneTimePreKeyFromClient := range messageFromClientProtobuf.Response.OneTimePrekeys {
+						logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Persisted oneTimePreKey with id : "+fmt.Sprint(oneTimePreKeyFromClient.TimeStamp)+" which belongs to : "+hex.EncodeToString(oneTimePreKeyFromClient.IdentityKey)))
+					} //for _, oneTimePreKeyFromClient := range messageFromClientProtobuf.Response.OneTimePrekeys {
+				} // if production == ""
+			} // if persistOneTimePreKeysFromClient == nil
+			return persistOneTimePreKeysFromClientErr
 		case messageFromClientProtobuf.Response.PreKeyBundle != nil:
 			return errors.New("Only backend is allowed to provide a PreKeyBundle")
 		case messageFromClientProtobuf.Response.SignedPreKey != nil:
-			return a.persistSignedPreKeyFromClient(messageFromClientProtobuf.Response.SignedPreKey)
+			persistSignedPreKeyFromClientErr := a.persistSignedPreKeyFromClient(messageFromClientProtobuf.Response.SignedPreKey)
+			if persistSignedPreKeyFromClientErr == nil {
+				// If we are not in a production environment, verbose log the signedPreKey persistance
+				if production == "" {
+					logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Persisted signedPreKey with id : "+fmt.Sprint(messageFromClientProtobuf.Response.SignedPreKey.TimeStamp)+" which belongs to : "+hex.EncodeToString(messageFromClientProtobuf.Response.SignedPreKey.IdentityKey)))
+				} // if production == ""
+			} // if persistSignedPreKeyFromClientErr == nil
+			return persistSignedPreKeyFromClientErr
 		} // Inner switch in case we have a Response from client
 
 	// The only time it should reach the default case is when both messageFromClientProtobuf.Request == nil && messageFromClientProtobuf.Response == nil
@@ -311,11 +366,9 @@ func (a *authenticatedClientFirestore) processMessage() error {
 		}
 	}
 	return nil
-} // func processMessage
+} // func processEvent
 
 func (a *authenticatedClientFirestore) deliverRequestedPreKeyBundle(requestedPreKeyBundle []byte) (string, error) {
-	// Store a temporary snapshot of the original authenticatedClientFirestore
-	originalClient := *a
 	// Set the authenticatedIdentityPublicKeyHex to the identityPublicKeyHex of the client that we should obtain a preKeyBundle for
 	a.authenticatedIdentityPublicKeyHex = hex.EncodeToString(requestedPreKeyBundle)
 	// Get the data from storage related to the identityPublicKeyHex of the client that we should obtain a preKeyBundle for
@@ -366,7 +419,6 @@ func (a *authenticatedClientFirestore) deliverRequestedPreKeyBundle(requestedPre
 	} // if protobufMessageToClientErr != nil {
 	// Send our message over the websocket connection
 	// Restore the temporary snapshot of the original authenticatedClientFirestore
-	a = &originalClient
 	usedOneTimePreKey := fmt.Sprint(messageToClientProtobuf.Response.PreKeyBundle.OneTimePreKey.TimeStamp)
 	return usedOneTimePreKey, a.websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientProtobufBytes)
 }
