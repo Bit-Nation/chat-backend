@@ -167,6 +167,8 @@ func getProfileFromBackend(t *testing.T) {
 	testifyRequire.Equal(t, profileProtobufBytes, profileBackend)
 	// Close the response body after the function ends
 	defer backendResponse.Body.Close()
+	// Wait for any background operations to complete
+	time.Sleep(5 * time.Second)
 } // func getProfileFromBackend(t *testing.T)
 
 func newStaticSignedPreKeyReceiver() bitnationX3dh.KeyPair {
