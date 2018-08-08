@@ -2,11 +2,10 @@
 
 
 [[projects]]
-  digest = "1:0fb3e8821ae47706fa5db3a6a081205564260b1c721d5895d23bc883e174839e"
+  digest = "1:22220ca4fb0ad466a0e91bd7e261ef1ac57a2b193fcac3805d8b5e293696ac7e"
   name = "cloud.google.com/go"
   packages = [
     "compute/metadata",
-    "datastore",
     "firestore",
     "firestore/apiv1beta1",
     "iam",
@@ -432,11 +431,10 @@
 
 [[projects]]
   branch = "master"
-  digest = "1:1661a9fe8da3da33346cacde9a95c7c5bdc4ff1dd8fe1998a3297c4a27274d24"
+  digest = "1:e3f9bb2410d3f2112aab43cfa756cbeb7adc8ee290f882352728d8b216401f6d"
   name = "google.golang.org/genproto"
   packages = [
     "googleapis/api/annotations",
-    "googleapis/datastore/v1",
     "googleapis/firestore/v1beta1",
     "googleapis/iam/v1",
     "googleapis/rpc/code",
@@ -486,7 +484,6 @@
   analyzer-name = "dep"
   analyzer-version = 1
   input-imports = [
-    "cloud.google.com/go/datastore",
     "cloud.google.com/go/firestore",
     "firebase.google.com/go",
     "github.com/Bit-Nation/panthalassa/keyManager",
@@ -502,7 +499,6 @@
     "github.com/stretchr/testify/require",
     "github.com/tiabc/doubleratchet",
     "golang.org/x/crypto/ed25519",
-    "golang.org/x/oauth2/google",
     "google.golang.org/api/option",
   ]
   solver-name = "gps-cdcl"

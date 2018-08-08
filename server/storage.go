@@ -6,16 +6,15 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"log/syslog"
 	"os"
 
-	datastore "cloud.google.com/go/datastore"
 	firestore "cloud.google.com/go/firestore"
 	firebase "firebase.google.com/go"
 	backendProtobuf "github.com/Bit-Nation/protobuffers"
 	golangProto "github.com/golang/protobuf/proto"
 	gorillaWebSocket "github.com/gorilla/websocket"
-	google "golang.org/x/oauth2/google"
 	option "google.golang.org/api/option"
 )
 
@@ -44,21 +43,28 @@ func newFirestoreConnection() (*firestore.Client, error) {
 	networkContext := context.Background()
 	// Get the JSON credentials from our own custom enviroment variable to increase compatibility
 	credentialsHex := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+	// Decode the serviceAccount credentials
 	credentialsJSON, hexDecodeErr := hex.DecodeString(credentialsHex)
 	if hexDecodeErr != nil {
 		return nil, hexDecodeErr
 	} // if hexDecodeErr !- nil {
-	// Get the firestore projectID from our custom enviroment variable
-	projectID := os.Getenv("FIRESTORE_PROJECT_ID")
-	// Creaet new config using our credentials
-	jwtConfig, jwtConfigErr := google.JWTConfigFromJSON([]byte(credentialsJSON), datastore.ScopeDatastore)
-	if jwtConfigErr != nil {
-		return nil, jwtConfigErr
-	} // if jwtConfigErr != nil
-	// Create a new token source from the config
-	tokenSource := jwtConfig.TokenSource(networkContext)
-	// Initialise a new firebase application using the context and the token source
-	firebaseApp, firebaseAppErr := firebase.NewApp(networkContext, &firebase.Config{ProjectID: projectID}, option.WithTokenSource(tokenSource))
+	// Create a service account file so we can use firestore helper functions to authenticate properly
+	serviceAccountFile, serviceAccountFileErr := ioutil.TempFile(os.TempDir(), "serviceAccount_")
+	if serviceAccountFileErr != nil {
+		return nil, serviceAccountFileErr
+	} // if serviceAccountFileErr != nil
+	// Store the full path and name of the serviceAccount temp file to avoid calling .Name() twice
+	serviceAccountFileName := serviceAccountFile.Name()
+	// Make sure to delete the temporariy file
+	defer os.Remove(serviceAccountFileName)
+	// Write the serviceAccount json information into the serviceAccount temp file
+	if _, writeErr := serviceAccountFile.WriteString(string(credentialsJSON)); writeErr != nil {
+		return nil, writeErr
+	} // if _, writeErr
+	// Use the serviceAccount temp file as a source of a credentials file
+	serviceAccount := option.WithCredentialsFile(serviceAccountFileName)
+	// Create a new firebase app based using the serviceAccount temp file
+	firebaseApp, firebaseAppErr := firebase.NewApp(networkContext, nil, serviceAccount)
 	if firebaseAppErr != nil {
 		return nil, firebaseAppErr
 	} // if firebaseAppErr != nil
