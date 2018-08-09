@@ -3,10 +3,18 @@ package chatbackend
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"io"
+	"io/ioutil"
+	"log/syslog"
 	"net/http"
+	"os"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	panthalassaKeyManager "github.com/Bit-Nation/panthalassa/keyManager"
 	panthalassaKeyStore "github.com/Bit-Nation/panthalassa/keyStore"
@@ -16,6 +24,7 @@ import (
 	bitnationX3dh "github.com/Bit-Nation/x3dh"
 	golangProto "github.com/golang/protobuf/proto"
 	gorillaWebSocket "github.com/gorilla/websocket"
+	uuid "github.com/satori/go.uuid"
 	testifyRequire "github.com/stretchr/testify/require"
 	tiabcDoubleratchet "github.com/tiabc/doubleratchet"
 	cryptoEd25519 "golang.org/x/crypto/ed25519"
@@ -31,8 +40,15 @@ type Client struct {
 }
 
 func TestHandleWebSocketConnection(t *testing.T) {
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New("STARTING TESTS"))
+	} // if production == ""
+	// Get the port on which the chat backend should be listening on
+	listenPort := os.Getenv("PORT")
 	// Start the websocket server
 	go StartWebSocketServer()
+	// Wait just a bit for the web socket to actually initialise before trying to connect to it
+	time.Sleep(1 * time.Second)
 	// Create a new static SignedPreKey to make testing easier
 	signedPreKeyReceiver := newStaticSignedPreKeyReceiver()
 	// Create a new static OneTimePreKey to make testing easier
@@ -44,8 +60,19 @@ func TestHandleWebSocketConnection(t *testing.T) {
 		"Earth",
 		"base64",
 		"amazing surprise admit live basic outside people echo fault come interest flat awesome dragon share reason suggest scatter project omit daring business push afford",
-		"ws://localhost:8080/chat",
-		"5d41402abc4b2a76b9719d911017c592",
+		"ws://127.0.0.1:"+listenPort+"/chat",
+		"super_secure_over_9000",
+		oneTimePreKeysReceiver,
+		signedPreKeyReceiver,
+	)
+	clientReceiverRestartedApp := newClient(
+		t,
+		"Receiver",
+		"Earth",
+		"base64",
+		"amazing surprise admit live basic outside people echo fault come interest flat awesome dragon share reason suggest scatter project omit daring business push afford",
+		"ws://127.0.0.1:"+listenPort+"/chat",
+		"super_secure_over_9000",
 		oneTimePreKeysReceiver,
 		signedPreKeyReceiver,
 	)
@@ -56,17 +83,49 @@ func TestHandleWebSocketConnection(t *testing.T) {
 		"Earth",
 		"base64",
 		"crunch ahead select guess pledge bundle midnight gossip episode govern brick humor forest age inhale scatter fringe love brief cute since room orange couple",
-		"ws://localhost:8080/chat",
-		"5d41402abc4b2a76b9719d911017c592",
+		"ws://127.0.0.1:"+listenPort+"/chat",
+		"super_secure_over_9000",
 		[]bitnationX3dh.KeyPair{},
 		bitnationX3dh.KeyPair{},
 	)
+	// Upload a profile on the backend
+	putProfileOnBackend(t)
+	// Retreive a profile from the backend
+	getProfileFromBackend(t)
 	// Reciever needs to pass authentication
 	clientReceiver.testAuth(t)
 	// Receiver uploads the one time pre keys
 	clientReceiver.testUploadOneTimePreKeys(t)
 	// Receiver uploads the signed pre key
 	clientReceiver.testUploadSignedPreKey(t)
+
+	// Receiver receives any real time messages while he is online
+	go func() {
+		if production == "" {
+			logError(syslog.LOG_INFO, errors.New(hex.EncodeToString(clientReceiver.Profile.Information.IdentityPubKey)+" *C 1* Waiting for real time messages"))
+		} // if production == ""
+		// Listen for real time messages, will block untill messages arrive
+		unreadChatMessages := clientReceiver.receiveUndeliveredMessages(t)
+		if production == "" {
+			logError(syslog.LOG_INFO, errors.New(hex.EncodeToString(clientReceiver.Profile.Information.IdentityPubKey)+" *C 1* Successfully received real time messages"))
+		} // if production == ""
+		// Test if we can decrypt the message successfully
+		expectedDecryptedMessages := []string{"SECRETMESSAGENEW1", "SECRETMESSAGENEW1", "SECRETMESSAGENEW1"}
+		// For each message that we want to read
+		for index, unreadChatMessage := range unreadChatMessages {
+			// Try to decrypt them and read them
+			clientReceiver.testReadDoubleRatchetMessages(t, unreadChatMessage, expectedDecryptedMessages[index])
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(hex.EncodeToString(clientReceiver.Profile.Information.IdentityPubKey)+" *C 1* Successfully decrypted and read real time messages : "+strconv.Itoa(index+1)))
+			} // if production == ""
+		} // for index, unreadChatMessage
+		// Close connection on purpose to test message exchange while client is offline
+		if production == "" {
+			logError(syslog.LOG_INFO, errors.New(hex.EncodeToString(clientReceiver.Profile.Information.IdentityPubKey)+" *C 1* Going offline on purpose to test receiving persisted messages"))
+		} // if production == ""
+		clientReceiver.WebSocketConnection.Close()
+	}()
+
 	// Initial message sender needs to pass authentication
 	clientSender.testAuth(t)
 	// Get a hex decoded byte representation of the identity public key for the initial message receiver that we want to chat with
@@ -76,22 +135,91 @@ func TestHandleWebSocketConnection(t *testing.T) {
 	remotePreKeyBundlePublic := clientSender.testRequestPreKeyBundle(t, identityPublicKeyBytes)
 	// Initial message sender sends a message to the backend to get persisted
 	clientSender.testSendMessage(t, remotePreKeyBundlePublic)
-	// Receiver reconnects
-	reconnectedWebSocketConnection := newWebSocketConnection(t, "ws://localhost:8080/chat", "5d41402abc4b2a76b9719d911017c592")
-	// We replace the disconnection connection with the re-established websocket connection
-	clientReceiver.WebSocketConnection = reconnectedWebSocketConnection
+	// Allow a bit of time for the real time message to be read and for the client to disconnect on purpose so we can test the offline one
+	time.Sleep(5 * time.Second)
+	// Initial message sender sends a message to the backend to get persisted
+	clientSender.testSendMessage(t, remotePreKeyBundlePublic)
 	// Receiver needs to pass auth again
-	clientReceiver.testAuth(t)
+	clientReceiverRestartedApp.testAuth(t)
 	// Receiver receives any undelivered messages while he was offline
-	unreadChatMessages := clientReceiver.receiveUndeliveredMessages(t)
+	unreadChatMessages := clientReceiverRestartedApp.receiveUndeliveredMessages(t)
 	// Test if we can decrypt the message successfully
-	expectedDecryptedMessages := []string{"SECRETMESSAGENEW1"}
+	expectedDecryptedMessages := []string{"SECRETMESSAGENEW1", "SECRETMESSAGENEW1", "SECRETMESSAGENEW1"}
 	// For each message that we want to read
 	for index, unreadChatMessage := range unreadChatMessages {
 		// Try to decrypt them and read them
-		clientReceiver.testReadDoubleRatchetMessages(t, unreadChatMessage, expectedDecryptedMessages[index])
+		clientReceiverRestartedApp.testReadDoubleRatchetMessages(t, unreadChatMessage, expectedDecryptedMessages[index])
+		if production == "" {
+			logError(syslog.LOG_INFO, errors.New(hex.EncodeToString(clientReceiverRestartedApp.Profile.Information.IdentityPubKey)+" *C 2* Successfully decrypted and read persisted messages : "+strconv.Itoa(index+1)))
+		} // if production == ""
 	} // for index, unreadChatMessage
+	// Leave some time for the background tasks to finish
+	time.Sleep(30 * time.Second)
 } // func TestHandleWebSocketConnection
+
+// Test persisting a static profile to the backend
+func putProfileOnBackend(t *testing.T) {
+	// Get the port on which the chat backend should be listening on
+	listenPort := os.Getenv("PORT")
+	// Use an already base64 encoded Profile protobuf bytes to make testing simpler
+	profileBase64 := strings.NewReader(`CgNCb2ISBUVhcnRoGgZiYXNlNjQiICLP0a9XmFRCh8v3choKTrwlBtb03wVBM1Wn9cyGdAckKiECcFb7RfrdatrDp9TlXw1/nNU/cF1hoxaMCoEPY1a7c8QyIH7ffl1cs/4+0WzRS7j7c+Y2/moLUj0iLxgLKbqakcphOLTasdoFQAJKQDztvodZmPkxuEBra1RGXsMsyirTIajSuaN4rOoNMkOPB/8+RXFZKVOhkjkNTsSW+WU7dYExiaxC8Wi7KVOB5wNSQaxE7LN3oNBk1GUkmyYFaN5fWrYmTDe9iz39gWH6/gCLVuFwA1g4RpMnNoiD0rdIC+9AL6gUC8XMQKZuuKOY/QcB`)
+	// Create a new PUT request to put the profile in the storage
+	httpRequest, httpRequestErr := http.NewRequest("PUT", "http://127.0.0.1:"+listenPort+"/profile", profileBase64)
+	testifyRequire.Nil(t, httpRequestErr)
+	// Set bearer auth
+	httpRequest.Header.Set("Bearer", "super_secure_over_9000")
+	// Set the identityPublicKey of the person who owns the profile
+	httpRequest.Header.Set("Identity", "22cfd1af5798544287cbf7721a0a4ebc2506d6f4df05413355a7f5cc86740724")
+	// Set the content type
+	httpRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	// Make the http request
+	backendResponse, backendResponseErr := http.DefaultClient.Do(httpRequest)
+	testifyRequire.Nil(t, backendResponseErr)
+	// If there is a more descriptive error, it will be contained in the response body
+	backendResponseBody, readErr := ioutil.ReadAll(backendResponse.Body)
+	testifyRequire.Nil(t, readErr)
+	// An empty response body means all is well
+	testifyRequire.Equal(t, []byte{}, backendResponseBody)
+	// Make sure that all went well
+	testifyRequire.Equal(t, "200 OK", backendResponse.Status)
+	defer backendResponse.Body.Close()
+} // func putProfileOnBackend
+
+// Test getting an already persisted profile from the backend
+func getProfileFromBackend(t *testing.T) {
+	// Get the port on which the chat backend should be listening on
+	listenPort := os.Getenv("PORT")
+	// Use an already base64 encoded Profile protobuf bytes to make testing simpler
+	profileBase64 := `CgNCb2ISBUVhcnRoGgZiYXNlNjQiICLP0a9XmFRCh8v3choKTrwlBtb03wVBM1Wn9cyGdAckKiECcFb7RfrdatrDp9TlXw1/nNU/cF1hoxaMCoEPY1a7c8QyIH7ffl1cs/4+0WzRS7j7c+Y2/moLUj0iLxgLKbqakcphOLTasdoFQAJKQDztvodZmPkxuEBra1RGXsMsyirTIajSuaN4rOoNMkOPB/8+RXFZKVOhkjkNTsSW+WU7dYExiaxC8Wi7KVOB5wNSQaxE7LN3oNBk1GUkmyYFaN5fWrYmTDe9iz39gWH6/gCLVuFwA1g4RpMnNoiD0rdIC+9AL6gUC8XMQKZuuKOY/QcB`
+	// Decode the base64 and get the pure Profile protobuf bytes
+	profileProtobufBytes, profileProtobufErr := base64.StdEncoding.DecodeString(profileBase64)
+	testifyRequire.Nil(t, profileProtobufErr)
+	// Create a new get request to get a profile from the backend
+	httpRequest, httpRequestErr := http.NewRequest("GET", "http://127.0.0.1:"+listenPort+"/profile", nil)
+	testifyRequire.Nil(t, httpRequestErr)
+
+	// Set bearer auth
+	httpRequest.Header.Set("Bearer", "super_secure_over_9000")
+	// Set the identityPublicKey of the person who owns the profile
+	httpRequest.Header.Set("Identity", "22cfd1af5798544287cbf7721a0a4ebc2506d6f4df05413355a7f5cc86740724")
+	// Set the content type
+	httpRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	// Make the http request
+	backendResponse, backendResponseErr := http.DefaultClient.Do(httpRequest)
+	testifyRequire.Nil(t, backendResponseErr)
+	// Read the base64 Profile protobuf bytes from the backend
+	profileBackendBase64, readErr := ioutil.ReadAll(backendResponse.Body)
+	testifyRequire.Nil(t, readErr)
+	// Decode the base64 Profile protobuf bytes to get the actual Profile protobuf bytes
+	profileBackend, profileErr := base64.StdEncoding.DecodeString(string(profileBackendBase64))
+	testifyRequire.Nil(t, profileErr)
+	// Make sure that the base64 decoded bytes are the same with the base64 decoded Profile protobuf bytes that the backend returns
+	testifyRequire.Equal(t, profileProtobufBytes, profileBackend)
+	// Close the response body after the function ends
+	defer backendResponse.Body.Close()
+	// Wait for any background operations to complete
+	time.Sleep(5 * time.Second)
+} // func getProfileFromBackend(t *testing.T)
 
 func newStaticSignedPreKeyReceiver() bitnationX3dh.KeyPair {
 	// Static SignedPreKey to make it easier for testing
@@ -117,7 +245,14 @@ func newWebSocketConnection(t *testing.T, websocketURL, bearer string) *gorillaW
 	// Initialize a websocket dialer
 	websocketDialer := gorillaWebSocket.Dialer{}
 	// Initialize a websocket connection of a message sender
-	websocketConnection, _, websocketConnectionErr := websocketDialer.Dial(websocketURL, customHeaders)
+	websocketConnection, websocketConnectionResponse, websocketConnectionErr := websocketDialer.Dial(websocketURL, customHeaders)
+	// Check if we have a valid object first to avoid panic
+	if websocketConnectionResponse != nil {
+		// Read the response from the websocket package which should contain debug info in case of error
+		websocketConnectionResponseBody, readErr := ioutil.ReadAll(websocketConnectionResponse.Body)
+		testifyRequire.Nil(t, readErr)
+		testifyRequire.Equal(t, []byte{}, websocketConnectionResponseBody)
+	}
 	testifyRequire.Nil(t, websocketConnectionErr)
 	return websocketConnection
 }
@@ -166,6 +301,9 @@ func (c *Client) testUploadOneTimePreKeys(t *testing.T) {
 		preKeyProtobuf.Key = oneTimePreKey.PublicKey[:]
 		// Set the IdentityKey in PreKey structure to the IdentityPubKey in the Client profile
 		preKeyProtobuf.IdentityKey = c.Profile.Information.IdentityPubKey
+		// Set a fix timestamp of the oneTimePreKey
+		// @TODO find out if this timestamp is fixed and related to oneTimePreKey creation time
+		preKeyProtobuf.TimeStamp = time.Now().UnixNano()
 		// Sign the IdentityKey with the KeyManager of the client
 		identityKeySignature, identityKeySignatureErr := c.KeyManager.IdentitySign(preKeyProtobuf.IdentityKey)
 		testifyRequire.Nil(t, identityKeySignatureErr)
@@ -203,6 +341,9 @@ func (c *Client) testUploadSignedPreKey(t *testing.T) {
 	preKeyProtobuf.Key = c.SignedPreKey.PublicKey[:]
 	// Set the IdentityKey in PreKey structure to the IdentityPubKey in the Client profile
 	preKeyProtobuf.IdentityKey = c.Profile.Information.IdentityPubKey
+	// Set a fix timestamp of the signedPreKey
+	// @TODO find out if this timestamp is fixed and related to signedPreKey creation time
+	preKeyProtobuf.TimeStamp = time.Now().UnixNano()
 	// Sign the IdentityKey with the KeyManager of the client
 	identityKeySignature, identityKeySignatureErr := c.KeyManager.IdentitySign(preKeyProtobuf.IdentityKey)
 	testifyRequire.Nil(t, identityKeySignatureErr)
@@ -230,7 +371,7 @@ func (c *Client) testSendMessage(t *testing.T, receiverPreKeyBundlePublic PreKey
 	// Initialize our Message structure to send a request to the backend
 	messageToBackendProto := backendProtobuf.BackendMessage{}
 	// Set a request id
-	messageToBackendProto.RequestID = "@TODO"
+	messageToBackendProto.RequestID = uuid.NewV4().String()
 	// Initialize an empty Request structure
 	messageToBackendProto.Request = &backendProtobuf.BackendMessage_Request{}
 	// Create a key store for the message Sender using the mnemonic from the client
@@ -286,19 +427,30 @@ func (c *Client) testSendMessage(t *testing.T, receiverPreKeyBundlePublic PreKey
 	// Set the Message to the doube Ratchet message
 	chatMessageSender.Message = &protobufDoubleRatchetMsgSender
 	// Set the message receiver to message Receiver IdentityKey from his PreKeyBundle
-	// @TODO : encode to hex?
 	chatMessageSender.Receiver = []byte(receiverPreKeyBundlePublic.BundleIdentityKey)
 	// Set the message sender to the message Sender IdentityKey
 	chatMessageSender.Sender = []byte(identityPublicKeySenderHex)
+	// Create a new message id
+	messageID := uuid.NewV4()
 	// Set the message ID
-	chatMessageSender.MessageID = []byte("@TODO")
+	chatMessageSender.MessageID = []byte(messageID.String())
 	// Set the used shared secret, (not in plain form)
 	chatMessageSender.UsedSharedSecret = []byte("@TODO")
 	// Set the version
 	// @TODO : setup proper versioning?
 	chatMessageSender.Version = 1
 	// Append the message to the slice of messages in our request
-	messageToBackendProto.Request.Messages = append(messageToBackendProto.Request.Messages, &chatMessageSender)
+
+	// Change the message id so that it stores it as a unique message on the backend storage
+	chatMessageSenderNewMessageID1 := chatMessageSender
+	chatMessageSenderNewMessageID2 := chatMessageSender
+	chatMessageSenderNewMessageID3 := chatMessageSender
+	chatMessageSenderNewMessageID1.MessageID = []byte(uuid.NewV4().String())
+	chatMessageSenderNewMessageID2.MessageID = []byte(uuid.NewV4().String())
+	chatMessageSenderNewMessageID3.MessageID = []byte(uuid.NewV4().String())
+	messageToBackendProto.Request.Messages = append(messageToBackendProto.Request.Messages, &chatMessageSenderNewMessageID1)
+	messageToBackendProto.Request.Messages = append(messageToBackendProto.Request.Messages, &chatMessageSenderNewMessageID2)
+	messageToBackendProto.Request.Messages = append(messageToBackendProto.Request.Messages, &chatMessageSenderNewMessageID3)
 	// Marshal our protobuf ChatMessage structure so that we can send it via our websocket connection
 	messageToBackendProtoBytes, messageToBackendProtoBytesErr := golangProto.Marshal(&messageToBackendProto)
 	testifyRequire.Nil(t, messageToBackendProtoBytesErr)
@@ -322,7 +474,7 @@ func (c *Client) testRequestPreKeyBundle(t *testing.T, preKeyBundleIdentifier []
 	// Initialize our Message structure to send a request to the backend
 	messageToBackendProto := backendProtobuf.BackendMessage{}
 	// Set a request id
-	messageToBackendProto.RequestID = "@TODO"
+	messageToBackendProto.RequestID = uuid.NewV4().String()
 	// Initialize an empty Request structure
 	messageToBackendProto.Request = &backendProtobuf.BackendMessage_Request{}
 	// Fill in the key of the client we want to requirest a pre key bundle for so that we can chat with
@@ -348,6 +500,7 @@ func (c *Client) testRequestPreKeyBundle(t *testing.T, preKeyBundleIdentifier []
 	preKeyBundleFromBackend := responseFromBackend.PreKeyBundle
 	// Get the OneTimePreKey from the received pre key bundle
 	oneTimePreKeyFromBackend := preKeyBundleFromBackend.OneTimePreKey
+
 	// Get the SignedPreKey from the received pre key bundle
 	signedPreKeyFromBackend := preKeyBundleFromBackend.SignedPreKey
 	// Get the Profile from the received pre key bundle
@@ -478,7 +631,7 @@ func (c *Client) testAuth(t *testing.T) {
 	// Initialize an empty Auth structure
 	messageToBackend.Response.Auth = &backendProtobuf.BackendMessage_Auth{}
 	// Set the type of request we are replying to
-	messageToBackend.RequestID = "@TODO"
+	messageToBackend.RequestID = uuid.NewV4().String()
 	// Read the data from the server which should contain the byte sequence we need to sign
 	_, messageFromBackendBytes, readMessageErr := c.WebSocketConnection.ReadMessage()
 	testifyRequire.Nil(t, readMessageErr)

@@ -3,12 +3,18 @@ package chatbackend
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"log"
+	"log/syslog"
 	"net/http"
+	"os"
+	"strconv"
 
+	profile "github.com/Bit-Nation/panthalassa/profile"
 	backendProtobuf "github.com/Bit-Nation/protobuffers"
 	golangProto "github.com/golang/protobuf/proto"
 	gorillaMux "github.com/gorilla/mux"
@@ -16,32 +22,111 @@ import (
 	cryptoEd25519 "golang.org/x/crypto/ed25519"
 )
 
-// @TODO REPLACE WITH GOOGLE DATASTORE
-// Proof of concept backend storage
-var multiUserChatMessage = make(map[string][][]byte)
-var multiUserProfileStore = make(map[string][]byte)
-var multiUserSignedPreKeyStore = make(map[string][]byte)
-var multiUserOneTimePreKeys = make(map[string][][]byte)
+var papertrailURL = os.Getenv("PAPERTRAIL")
+var production = os.Getenv("PRODUCTION")
+var authenticatedClientWebSocketConnectionMap = make(map[string]*gorillaWebSocket.Conn)
 
 // StartWebSocketServer starts the websocket server
 func StartWebSocketServer() {
-	multiUserProfileStore["22cfd1af5798544287cbf7721a0a4ebc2506d6f4df05413355a7f5cc86740724"] = []byte{10, 3, 66, 111, 98, 18, 5, 69, 97, 114, 116, 104, 26, 6, 98, 97, 115, 101, 54, 52, 34, 32, 34, 207, 209, 175, 87, 152, 84, 66, 135, 203, 247, 114, 26, 10, 78, 188, 37, 6, 214, 244, 223, 5, 65, 51, 85, 167, 245, 204, 134, 116, 7, 36, 42, 33, 2, 112, 86, 251, 69, 250, 221, 106, 218, 195, 167, 212, 229, 95, 13, 127, 156, 213, 63, 112, 93, 97, 163, 22, 140, 10, 129, 15, 99, 86, 187, 115, 196, 50, 32, 126, 223, 126, 93, 92, 179, 254, 62, 209, 108, 209, 75, 184, 251, 115, 230, 54, 254, 106, 11, 82, 61, 34, 47, 24, 11, 41, 186, 154, 145, 202, 97, 56, 180, 218, 177, 218, 5, 64, 2, 74, 64, 60, 237, 190, 135, 89, 152, 249, 49, 184, 64, 107, 107, 84, 70, 94, 195, 44, 202, 42, 211, 33, 168, 210, 185, 163, 120, 172, 234, 13, 50, 67, 143, 7, 255, 62, 69, 113, 89, 41, 83, 161, 146, 57, 13, 78, 196, 150, 249, 101, 59, 117, 129, 49, 137, 172, 66, 241, 104, 187, 41, 83, 129, 231, 3, 82, 65, 172, 68, 236, 179, 119, 160, 208, 100, 212, 101, 36, 155, 38, 5, 104, 222, 95, 90, 182, 38, 76, 55, 189, 139, 61, 253, 129, 97, 250, 254, 0, 139, 86, 225, 112, 3, 88, 56, 70, 147, 39, 54, 136, 131, 210, 183, 72, 11, 239, 64, 47, 168, 20, 11, 197, 204, 64, 166, 110, 184, 163, 152, 253, 7, 1}
+
+	// Get the port on which the chat backend should be listening on
+	listenPort := os.Getenv("PORT")
 	// Create new gorillaRouter
 	gorillaRouter := gorillaMux.NewRouter()
 	// Bind an endpoint path to handleWebSocketConnection
 	gorillaRouter.HandleFunc("/chat", HandleWebSocketConnection)
+	gorillaRouter.HandleFunc("/profile", HandleProfile)
+
 	// Listen on a specific port for incoming connections
-	if listenAndServeErr := http.ListenAndServe(":8080", gorillaRouter); listenAndServeErr != nil {
+	if listenAndServeErr := http.ListenAndServe(":"+listenPort, gorillaRouter); listenAndServeErr != nil {
 		// If there is an error while setting up, panic and show us the error
-		log.Fatal("ListenAndServe: " + listenAndServeErr.Error())
+		logError(syslog.LOG_CRIT, listenAndServeErr)
 	} // if listenAndServeErr
 } // func startWebSocketServer
 
+// HandleProfile decides what happens when a client requests or uploads a profile
+func HandleProfile(serverHTTPResponse http.ResponseWriter, clientHTTPRequest *http.Request) {
+	// Get bearer token from environment variable
+	bearerToken := os.Getenv("BEARER")
+	// Make sure the client passes the bearer authentication
+	if clientHTTPRequest.Header.Get("Bearer") != bearerToken {
+		http.Error(serverHTTPResponse, "Forbidden", 403)
+		return
+	} // if clientHTTPRequest.Header.Get("Bearer")
+	// Choose different actions depending on the type of request
+	switch clientHTTPRequest.Method {
+	case "GET":
+		// Get the identity public key for the client that we want to obtain the profile for
+		profile, profileErr := getProfileFromStorage(clientHTTPRequest.Header.Get("Identity"))
+		// If there is an error while obtaining the profile, inform the client
+		if profileErr != nil {
+			http.Error(serverHTTPResponse, profileErr.Error(), 500)
+			return
+		} // if profileErr != nil {
+		// Write the protobyfBytes of the Profile protobuf structure to the client, in case of ann error inform the client
+		if _, serverHTTPResponseErr := serverHTTPResponse.Write([]byte(base64.StdEncoding.EncodeToString(profile))); serverHTTPResponseErr != nil {
+			logError(syslog.LOG_ERR, serverHTTPResponseErr)
+			http.Error(serverHTTPResponse, serverHTTPResponseErr.Error(), 500)
+			return
+		} // if _, serverHTTPResponseErr
+	case "PUT":
+		var profileProtobuf backendProtobuf.Profile
+		// Read a base64 representation of the Profile protobuf structure bytes
+		profileBase64Bytes, readErr := ioutil.ReadAll(clientHTTPRequest.Body)
+		if readErr != nil {
+			http.Error(serverHTTPResponse, readErr.Error(), 500)
+			return
+		} // if readErr != nil {
+		// Create a string representation of the profileBase64Bytes for easier usage and decoding
+		profileBase64String := string(profileBase64Bytes)
+		// Decode the string representation of the profileBase64Bytes into protobuf bytes
+		profileProtobufBytes, profileBytesErr := base64.StdEncoding.DecodeString(profileBase64String)
+		if profileBytesErr != nil {
+			http.Error(serverHTTPResponse, readErr.Error(), 500)
+			return
+		} // if profileBytesErr != nil
+		// Unmarshal the protobuf bytes into protobuf Profile structure
+		if protoUnmarshalErr := golangProto.Unmarshal(profileProtobufBytes, &profileProtobuf); protoUnmarshalErr != nil {
+			http.Error(serverHTTPResponse, protoUnmarshalErr.Error(), 500)
+			return
+		} // if protoUnmarshalErr
+		// Create a profile object from our protobuf Profile structure
+		profileObject, profileErr := profile.ProtobufToProfile(&profileProtobuf)
+		if profileErr != nil {
+			http.Error(serverHTTPResponse, profileErr.Error(), 500)
+			return
+		}
+		// Validate the signature of the profile, return if there is an error as we don't accept profiles with invalid signatures
+		validProfileSignature, validProfileSignatureErr := profileObject.SignaturesValid()
+		if validProfileSignatureErr != nil {
+			http.Error(serverHTTPResponse, validProfileSignatureErr.Error(), 500)
+			return
+		}
+		// Double check that the SignaturesValid() method returned true
+		if !validProfileSignature {
+			http.Error(serverHTTPResponse, errors.New("Invalid Signature").Error(), 500)
+			return
+		}
+		// Persist the base64 representation of the Profile protobuf structure bytes, in case of an error inform the client, othterwise inform that it's ok
+		if persistProfileToStorageErr := persistProfileToStorage(hex.EncodeToString(profileObject.Information.IdentityPubKey), profileBase64String); persistProfileToStorageErr != nil {
+			http.Error(serverHTTPResponse, persistProfileToStorageErr.Error(), 500)
+		} else {
+			// Inform the client that everything is ok
+			serverHTTPResponse.WriteHeader(http.StatusOK)
+		} // else
+	// Forbid other methods at the time being
+	default:
+		http.Error(serverHTTPResponse, "Method Not Allowed", 405)
+	} // switch clientHTTPRequest.Method
+} // func HandleProfile
+
 // HandleWebSocketConnection decides what happens when a client establishes a websocket connection to the server
 func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTTPRequest *http.Request) {
+	// Get bearer token from environment variable
+	bearerToken := os.Getenv("BEARER")
 	// Allow only requests which contain the specific Bearer header
 	// Allow only GET requests
-	if clientHTTPRequest.Header.Get("Bearer") != "5d41402abc4b2a76b9719d911017c592" || clientHTTPRequest.Method != "GET" {
+	if clientHTTPRequest.Header.Get("Bearer") != bearerToken || clientHTTPRequest.Method != "GET" {
 		// If a client is missing the Bearer header or is using a different method than GET return a Forbidden error
 		http.Error(serverHTTPResponse, "Forbidden", 403)
 		return
@@ -57,50 +142,94 @@ func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 		websocketConnection.Close()
 		return
 	}
+	// Initialise the authenticatedClientFirestore object
+	authenticatedClient := authenticatedClientFirestore{}
+	// Set the websocketConnection so that we can send an error back to the client in case auth fails
+	authenticatedClient.websocketConnection = websocketConnection
 	// Require successful authentication before allowing a client to send a message
 	authenticatedIdentityPublicKeyClient, websocketConnectionRequestAuthErr := requestAuth(websocketConnection)
 	// If the authentication failed,
 	if websocketConnectionRequestAuthErr != nil {
 		// Log a failed authentication attempt
-		log.Println("Authentication Failed:", websocketConnectionRequestAuthErr)
+		logError(syslog.LOG_ERR, websocketConnectionRequestAuthErr)
 		// In case there was a protobuf marshal error, The client would receive an empty []byte and should handle it as an invalid response
 		// Even with an invalid response, the client should still take the hint that his authentication attempt has failed
-		if writeMessageErr := sendErrorToClient(websocketConnectionRequestAuthErr, websocketConnection); writeMessageErr != nil {
-			log.Println("Error while sending an error to the client:", writeMessageErr)
+		if writeMessageErr := authenticatedClient.sendErrorToClient(); writeMessageErr != nil {
+			logError(syslog.LOG_ERR, writeMessageErr)
 		} // if writeMessageErr
-		log.Println("Terminating websocket connection to client.")
+		logError(syslog.LOG_INFO, errors.New("terminating websocket connection to client"))
 		// Close the websocket connection
 		websocketConnection.Close()
 		return
 	} // if websocketConnectionRequestAuthErr != nil
-
-	// Check if there are pending messages to be delivered when the client comes back online
-	if messagesToBeDelivered, ok := multiUserChatMessage[hex.EncodeToString(authenticatedIdentityPublicKeyClient)]; ok {
-		deliverMessages(websocketConnection, messagesToBeDelivered)
-	} // if messagesToBeDelivered
-
-	// Try to process a message from the client
-	websocketConnectionProcessMessageErr := processMessage(websocketConnection, authenticatedIdentityPublicKeyClient)
-	// For as long as we don't enounter an error while processing messages from the client
-	for websocketConnectionProcessMessageErr == nil {
-		// Process messages from the client
-		websocketConnectionProcessMessageErr = processMessage(websocketConnection, authenticatedIdentityPublicKeyClient)
-	} // for websocketConnectionProcessMessageErr == nil
-	// Once we enounter an error while processing messages from the client
-	// Log the error we encountered
-	log.Println("Error while processing message from the client", websocketConnectionProcessMessageErr)
-	// If there is an error while sending the error to the client, log the error
-	if writeMessageErr := sendErrorToClient(websocketConnectionProcessMessageErr, websocketConnection); writeMessageErr != nil {
-		log.Println("Error while sending an error to the client:", writeMessageErr)
-	} // if writeMessageErr
-	log.Println("Terminating websocket connection to client.")
-	// Close the websocket connection
-	websocketConnection.Close()
-	return
-	// Read first message from client
+	// Only set the authenticatedIdentityPublicKeyHex once authentication has been successful
+	authenticatedClient.authenticatedIdentityPublicKeyHex = hex.EncodeToString(authenticatedIdentityPublicKeyClient)
+	// Store the connection of an authenticated client so that other clients can interact with him in real time
+	authenticatedClientWebSocketConnectionMap[authenticatedClient.authenticatedIdentityPublicKeyHex] = websocketConnection
+	// If it's a dev enviroment, log verbose info
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New(authenticatedClient.authenticatedIdentityPublicKeyHex+" Auth Successful"))
+	} // if production == ""
+	// Continue in the scope of the authenticatedWebsocketConnection to allow for easier testing
+	authenticatedWebsocketConnection(&authenticatedClient)
+	// Wait some in case things are still using resources
 } // func handleWebSocketConnection
 
-func sendErrorToClient(encounteredError error, websocketConnection *gorillaWebSocket.Conn) error {
+func authenticatedWebsocketConnection(storage storageInterface) {
+	authenticatedClient, authenticatedClientErr := storage.getClientDataFromStorage()
+	if authenticatedClientErr != nil {
+		logError(syslog.LOG_ERR, authenticatedClientErr)
+	} // if authenticatedClientErr != nil
+	// If it's a dev enviroment, log verbose info
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New(authenticatedClient.authenticatedIdentityPublicKeyHex+" Undelivered messages : "+strconv.Itoa(len(authenticatedClient.messagesToBeDelivered))))
+	} // if production == ""
+	if len(authenticatedClient.messagesToBeDelivered) > 0 {
+		// If there are no errors while deliveing the messages to the client
+		if deliverMessagesErr := authenticatedClient.deliverMessages(authenticatedClient.messagesToBeDelivered); deliverMessagesErr == nil {
+			// @TODO Maybe require the client to echo the message we sent to him as a confirmation that he handled it successfully
+			// If there are no errors while deleteing the messages which were delivered
+			// If it's a dev enviroment, log verbose info
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(authenticatedClient.authenticatedIdentityPublicKeyHex+" Receiving Messages : "+strconv.Itoa(len(authenticatedClient.messagesToBeDelivered))))
+			} // if production == ""
+			if deleteFromFieldErr := authenticatedClient.deleteFieldFromStorage("chatMessages", ""); deleteFromFieldErr != nil {
+				logError(syslog.LOG_ERR, deleteFromFieldErr)
+			} // if deleteFromFieldErr
+			// If it's a dev enviroment, log verbose info
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(authenticatedClient.authenticatedIdentityPublicKeyHex+" Deleting Messages from storage : "+strconv.Itoa(len(authenticatedClient.messagesToBeDelivered))))
+			} // if production == ""
+		} // if deliverMessagesErr == nil
+	} // if len(messagesToBeDelivered > 0)
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New(authenticatedClient.authenticatedIdentityPublicKeyHex+" Waiting for client event"))
+	} // if production == "")
+	// Try to process a message from the client
+	processedEvents := 0
+	websocketConnectionprocessEventErr := authenticatedClient.processEvent(processedEvents)
+	// For as long as we don't enounter an error while processing messages from the client
+	for websocketConnectionprocessEventErr == nil {
+		// Process messages from the client
+		processedEvents++
+		websocketConnectionprocessEventErr = authenticatedClient.processEvent(processedEvents)
+	} // for websocketConnectionprocessEventErr == nil
+	// Once we enounter an error while processing messages from the client
+	// Log the error we encountered
+	logError(syslog.LOG_ERR, websocketConnectionprocessEventErr)
+	// If there is an error while sending the error to the client, log the error
+	if writeMessageErr := authenticatedClient.sendErrorToClient(); writeMessageErr != nil {
+		logError(syslog.LOG_ERR, writeMessageErr)
+	} // if writeMessageErr
+	logError(syslog.LOG_INFO, errors.New("terminating websocket connection to client"))
+	// Close the websocket connection
+	authenticatedClient.websocketConnection.Close()
+	delete(authenticatedClientWebSocketConnectionMap, authenticatedClient.authenticatedIdentityPublicKeyHex)
+	return
+	// Read first message from client
+} // func authenticatedWebsocketConnection
+
+func (a *authenticatedClientFirestore) sendErrorToClient() error {
 	// Create a protobuf message structure to send back to the client
 	var messageToClientProtobuf backendProtobuf.BackendMessage
 	// Create a []byte variable to hold the marshaled protobuf bytes
@@ -108,27 +237,38 @@ func sendErrorToClient(encounteredError error, websocketConnection *gorillaWebSo
 	// Create an error variable to hold an error in case the protobuf marshaling failed
 	var messageToClientProtobufBytesErr error
 	// Set the authentication error in the message structure so it can be sent back to the client
-	messageToClientProtobuf.Error = encounteredError.Error()
+	if a.encounteredError != nil {
+		messageToClientProtobuf.Error = a.encounteredError.Error()
+	} // if a.encounteredError != nil
 	// If there is an error while marshaling the message structure, log the error and continue with the rest of the function
 	if messageToClientProtobufBytes, messageToClientProtobufBytesErr = golangProto.Marshal(&messageToClientProtobuf); messageToClientProtobufBytesErr != nil {
-		log.Println("Error while marshaling the message to client:", messageToClientProtobufBytesErr)
+		logError(syslog.LOG_ERR, messageToClientProtobufBytesErr)
 	} // if messageToClientProtobufBytes
 	// Returned the marshaled message bytes
-	if writeMessageErr := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientProtobufBytes); writeMessageErr != nil {
+	if writeMessageErr := a.websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientProtobufBytes); writeMessageErr != nil {
 		return writeMessageErr
 	} // if writeMessageErr
 	// Return nil when no error was encountered
 	return nil
 } // func sendErrorToClient
 
-func processMessage(websocketConnection *gorillaWebSocket.Conn, authenticatedIdentityPublicKeyClient []byte) error {
+func (a *authenticatedClientFirestore) processEvent(eventsProcessed int) error {
 	// Initialize an empty variable to hold the protobuf message
 	var messageFromClientProtobuf backendProtobuf.BackendMessage
 	// Read a message from a client over the websocket connection
-	_, messageFromClientBytes, readMessageErr := websocketConnection.ReadMessage()
+	_, messageFromClientBytes, readMessageErr := a.websocketConnection.ReadMessage()
+	// If there is an error while reading the message from client
 	if readMessageErr != nil {
-		return readMessageErr
-	}
+		// If it's not a normal connection closure, return an error
+		if !gorillaWebSocket.IsCloseError(readMessageErr, gorillaWebSocket.CloseNormalClosure) {
+			return readMessageErr
+		}
+		return nil
+	} // if readMessageErr != nil
+	// If it's a dev enviroment, log verbose info
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Processing client event number : "+strconv.Itoa(eventsProcessed)))
+	} // if production == "")
 	// Unmarshal the protobuf bytes from the message we received into our protobuf message structure
 	if protoUnmarshalErr := golangProto.Unmarshal(messageFromClientBytes, &messageFromClientProtobuf); protoUnmarshalErr != nil {
 		return protoUnmarshalErr
@@ -148,14 +288,68 @@ func processMessage(websocketConnection *gorillaWebSocket.Conn, authenticatedIde
 		// Inner switch in case we have a Request from client, cases are valid if they are true
 		switch {
 		case messageFromClientProtobuf.Request.Messages != nil:
-			return handleMessageFromClient(websocketConnection, messageFromClientProtobuf.Request.Messages)
+			for _, singleMessage := range messageFromClientProtobuf.Request.Messages {
+				// Store the intendedMessageReciepint in a variable to avoid calling hex.EncodeToString multiple times
+				intendedMessageReciepient := hex.EncodeToString(singleMessage.Receiver)
+				// If the intended message recipient has an active connection to the backend
+				if websocketConnectionMessageRecipient, exists := authenticatedClientWebSocketConnectionMap[intendedMessageReciepient]; exists {
+					if production == "" {
+						logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Attempting to send a real time message to : "+intendedMessageReciepient))
+					} // if production == ""
+					// Echo the received messages back to the message sender so that we confirm that we handled them corectly
+					if echoMessagesBackToClientErr := a.echoMessagesBackToClient(messageFromClientProtobuf.Request.Messages); echoMessagesBackToClientErr != nil {
+						// If there is an error in confirming that the messages were handled correctly, just log the error as we already have the messages
+						logError(syslog.LOG_ERR, echoMessagesBackToClientErr)
+					} // if echoMessagesBackToClientErr
+					// // Attempt to send the messages messages in real time to the intendedMessageRecipient, in case of an error
+					if writeMessageErr := websocketConnectionMessageRecipient.WriteMessage(gorillaWebSocket.BinaryMessage, messageFromClientBytes); writeMessageErr != nil {
+						// Log the error and continue persisting the message to the backend
+						logError(syslog.LOG_ERR, writeMessageErr)
+						// Else in case of no error
+					} else {
+						if production == "" {
+							logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Not persisting message on backend as successfuly sent it in real time to : "+intendedMessageReciepient))
+						} // if production == ""
+						// Return nil and don't persist the message to the backend
+						return writeMessageErr
+					} // else
+				} // if websocketConnectionMessageRecipient, exists
+			} // for _, singleMessage
+			persistChatMessagesFromClientErr := a.persistChatMessagesFromClient(messageFromClientProtobuf.Request.Messages)
+			// If there was no error while persisting the messages
+			if persistChatMessagesFromClientErr == nil {
+				// For each message that was persisted
+				for _, singleMessageFromClient := range messageFromClientProtobuf.Request.Messages {
+					// If we are in dev mode, log each persisted event
+					if production == "" {
+						logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Persisted message meant for offline client : "+hex.EncodeToString(singleMessageFromClient.Receiver)))
+					} // if production == ""
+				} // for singleMessageFromClient := range messageFromClientProtobuf.Request.Messages {
+			} // persistChatMessagesFromClientErr
+			// If there is an error while reading the message from client
+			return persistChatMessagesFromClientErr
 		// @TODO wait for @Gross input on message states
 		case messageFromClientProtobuf.Request.MessageStateChange != nil:
 			fmt.Println(messageFromClientProtobuf.Request.MessageStateChange, "MessageStateChange")
 		case messageFromClientProtobuf.Request.NewOneTimePreKeys != 0:
 			return errors.New("Only backend is allowed to request NewOneTimePreKeys")
 		case messageFromClientProtobuf.Request.PreKeyBundle != nil:
-			return deliverRequestedPreKeyBundle(websocketConnection, messageFromClientProtobuf.Request.PreKeyBundle)
+			// Create a new instance of authenticatedClientFirestore to assist us with fetching the requested preKeyBundle
+			authenticatedClientForPreKeyBundle := authenticatedClientFirestore{}
+			// Use the already existing websocket connection which is expecting a respond to their request for the preKeyBundle
+			authenticatedClientForPreKeyBundle.websocketConnection = a.websocketConnection
+			// Requesting a pre key bundle consumes a oneTimePreKey thus we note it down
+			usedOneTimePreKey, deliverRequestedPreKeyBundleErr := authenticatedClientForPreKeyBundle.deliverRequestedPreKeyBundle(messageFromClientProtobuf.Request.PreKeyBundle)
+			// If there was no error while delivering the preKeyBundle, delete the consumed oneTimePreKey
+			if deliverRequestedPreKeyBundleErr == nil {
+				if production == "" {
+					logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Delivered preKeyBundle which belongs to : "+hex.EncodeToString(messageFromClientProtobuf.Request.PreKeyBundle)))
+					logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Deleted consumed oneTimePreKey with id : "+usedOneTimePreKey+" which belongs to : "+hex.EncodeToString(messageFromClientProtobuf.Request.PreKeyBundle)))
+				} // if production == ""
+				// Delete the oneTimePreKey which got consumed
+				authenticatedClientForPreKeyBundle.deleteFieldFromStorage("oneTimePreKeys", usedOneTimePreKey)
+			} // if deliverRequestedPreKeyBundleErr
+			return deliverRequestedPreKeyBundleErr
 		case messageFromClientProtobuf.Request.Auth != nil:
 			return errors.New("Backend should request authentication, not the client")
 		} // Inner switch {
@@ -165,12 +359,30 @@ func processMessage(websocketConnection *gorillaWebSocket.Conn, authenticatedIde
 		switch {
 		case messageFromClientProtobuf.Response.Auth != nil:
 			return errors.New("Authentication should not be handled here")
+
 		case messageFromClientProtobuf.Response.OneTimePrekeys != nil:
-			return persistOneTimeKeysFromClient(websocketConnection, messageFromClientProtobuf.Response.OneTimePrekeys, authenticatedIdentityPublicKeyClient)
+			persistOneTimePreKeysFromClientErr := a.persistOneTimePreKeysFromClient(messageFromClientProtobuf.Response.OneTimePrekeys)
+			// If no error was encountered while persisting the oneTimePreKeys from the client
+			if persistOneTimePreKeysFromClientErr == nil {
+				// If we are not in a production environment, verbose log each oneTimePreKey persistance
+				if production == "" {
+					for _, oneTimePreKeyFromClient := range messageFromClientProtobuf.Response.OneTimePrekeys {
+						logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Persisted oneTimePreKey with id : "+fmt.Sprint(oneTimePreKeyFromClient.TimeStamp)+" which belongs to : "+hex.EncodeToString(oneTimePreKeyFromClient.IdentityKey)))
+					} //for _, oneTimePreKeyFromClient := range messageFromClientProtobuf.Response.OneTimePrekeys {
+				} // if production == ""
+			} // if persistOneTimePreKeysFromClient == nil
+			return persistOneTimePreKeysFromClientErr
 		case messageFromClientProtobuf.Response.PreKeyBundle != nil:
 			return errors.New("Only backend is allowed to provide a PreKeyBundle")
 		case messageFromClientProtobuf.Response.SignedPreKey != nil:
-			return persistSignedPreKeyFromClient(websocketConnection, messageFromClientProtobuf.Response.SignedPreKey, authenticatedIdentityPublicKeyClient)
+			persistSignedPreKeyFromClientErr := a.persistSignedPreKeyFromClient(messageFromClientProtobuf.Response.SignedPreKey)
+			if persistSignedPreKeyFromClientErr == nil {
+				// If we are not in a production environment, verbose log the signedPreKey persistance
+				if production == "" {
+					logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Persisted signedPreKey with id : "+fmt.Sprint(messageFromClientProtobuf.Response.SignedPreKey.TimeStamp)+" which belongs to : "+hex.EncodeToString(messageFromClientProtobuf.Response.SignedPreKey.IdentityKey)))
+				} // if production == ""
+			} // if persistSignedPreKeyFromClientErr == nil
+			return persistSignedPreKeyFromClientErr
 		} // Inner switch in case we have a Response from client
 
 	// The only time it should reach the default case is when both messageFromClientProtobuf.Request == nil && messageFromClientProtobuf.Response == nil
@@ -184,76 +396,18 @@ func processMessage(websocketConnection *gorillaWebSocket.Conn, authenticatedIde
 		}
 
 		if messageFromClientProtobuf.RequestID == "" {
-			websocketConnection.Close()
+			a.websocketConnection.Close()
+			delete(authenticatedClientWebSocketConnectionMap, a.authenticatedIdentityPublicKeyHex)
 		}
 	}
 	return nil
-} // func processMessage
+} // func processEvent
 
-func persistOneTimeKeysFromClient(websocketConnection *gorillaWebSocket.Conn, oneTimePreKeysFromClient []*backendProtobuf.PreKey, authenticatedIdentityPublicKeyClient cryptoEd25519.PublicKey) error {
-	// For each one time pre key received from client
-	for _, oneTimePreKeyFromClient := range oneTimePreKeysFromClient {
-		// Create a hex representation of the IdentityKey of the client
-		clientIdentityKeyHex := hex.EncodeToString(oneTimePreKeyFromClient.IdentityKey)
-		// Use protobuf to marshal the one time pre key into bytes so that we can store it easily
-		oneTimePreKeyFromClientProtobufBytes, protoMarshalErr := golangProto.Marshal(oneTimePreKeyFromClient)
-		// If there is an error while marshalling the one time pre key from the client, return it
-		if protoMarshalErr != nil {
-			return protoMarshalErr
-		}
-		// Store the one time pre key from the client
-		multiUserOneTimePreKeys[clientIdentityKeyHex] = append(multiUserOneTimePreKeys[clientIdentityKeyHex], oneTimePreKeyFromClientProtobufBytes)
-		// Signal to the client that the one time pre key has been persisted
-		if writeMessageError := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, oneTimePreKeyFromClientProtobufBytes); writeMessageError != nil {
-			return writeMessageError
-		} // if writeMessageError
-	} // for _, oneTimePreKeyFromClient
-	return nil
-} // func persistOneTimeKeysFromClient
-
-func persistSignedPreKeyFromClient(websocketConnection *gorillaWebSocket.Conn, signedPreKeyFromClient *backendProtobuf.PreKey, authenticatedIdentityPublicKeyClient cryptoEd25519.PublicKey) error {
-	// Create a hex representation of the IdentityKey of the client
-	clientIdentityKeyHex := hex.EncodeToString(signedPreKeyFromClient.IdentityKey)
-	// Use protobuf to marshal the signed pre key into bytes so that we can store it easily
-	signedPreKeyFromClientProtobufBytes, protoMarshalErr := golangProto.Marshal(signedPreKeyFromClient)
-	// If there is an error while marshalling the signed pre key from the client, return it
-	if protoMarshalErr != nil {
-		return protoMarshalErr
-	}
-	// Store the SignedPreKey from the client
-	multiUserSignedPreKeyStore[clientIdentityKeyHex] = signedPreKeyFromClientProtobufBytes
-	// Signal to the client that the SignedPreyKey has been persisted
-	if writeMessageError := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, signedPreKeyFromClientProtobufBytes); writeMessageError != nil {
-		return writeMessageError
-	} // if writeMessageError
-	return nil
-} // func persistSignedPreKeyFromClient
-
-func handleMessageFromClient(websocketConnection *gorillaWebSocket.Conn, messagesFromClient []*backendProtobuf.ChatMessage) error {
-	// For each message received from client
-	for _, singleMessageFromClient := range messagesFromClient {
-		// Use protobuf to marshal the message into bytes so that we can store it easily
-		chatMessageProtobufBytes, chatMessageProtobufError := golangProto.Marshal(singleMessageFromClient)
-		// If there is an error while marshaling the individual message from the client, return it
-		if chatMessageProtobufError != nil {
-			return chatMessageProtobufError
-		} // if chatMessageProtobufError != nil
-		// Convert the identityPublicKey of the intented recipient of the message into a string so that it's easier to use
-		messageReceiverString := hex.EncodeToString(singleMessageFromClient.Receiver)
-		// Use the string representation of the identityPublicKey as part of our backend storage
-		multiUserChatMessage[messageReceiverString] = append(multiUserChatMessage[messageReceiverString], chatMessageProtobufBytes)
-		// Echo back the same message we received from the client back to him so that we inform him that the message has been persisted
-		if writeMessageError := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, chatMessageProtobufBytes); writeMessageError != nil {
-			// If there is an error while sending a message to a client
-			return writeMessageError
-		} // if writeMessageError != nil
-	} // for _, singleMessageFromClient
-	return nil
-} // func handleMessageFromClient
-
-func deliverRequestedPreKeyBundle(websocketConnection *gorillaWebSocket.Conn, requestedPreKeyBundle []byte) error {
-	// Create a string representation of the publicKey associated with the user in the preKeyBundle request
-	requestedPreKeyBundleString := hex.EncodeToString(requestedPreKeyBundle)
+func (a *authenticatedClientFirestore) deliverRequestedPreKeyBundle(requestedPreKeyBundle []byte) (string, error) {
+	// Set the authenticatedIdentityPublicKeyHex to the identityPublicKeyHex of the client that we should obtain a preKeyBundle for
+	a.authenticatedIdentityPublicKeyHex = hex.EncodeToString(requestedPreKeyBundle)
+	// Get the data from storage related to the identityPublicKeyHex of the client that we should obtain a preKeyBundle for
+	a.getClientDataFromStorage()
 	// Initialize an empty variable to hold the marshaled protobuf bytes of our response to the client
 	var messageToClientProtobufBytes []byte
 	// Initialize an empty variable to hold a protobuf error in case there is one
@@ -270,39 +424,23 @@ func deliverRequestedPreKeyBundle(websocketConnection *gorillaWebSocket.Conn, re
 	messageToClientProtobuf.Response.PreKeyBundle.SignedPreKey = &backendProtobuf.PreKey{}
 	// Initialize an empty PreKey structure which would hold the requested OneTimePreKey if it exists
 	messageToClientProtobuf.Response.PreKeyBundle.OneTimePreKey = &backendProtobuf.PreKey{}
-	// If a Profile which matches the client request exists in our backend storage
-	if singleUserProfile, ok := multiUserProfileStore[requestedPreKeyBundleString]; ok {
-		// Unmarshal it into our PreKeyBundle structure
-		if protoUnmarshalErr := golangProto.Unmarshal(singleUserProfile, messageToClientProtobuf.Response.PreKeyBundle.Profile); protoUnmarshalErr != nil {
-			// If there is an error with the unmarshalling, fill in the error field in the message to client with the error that occured
-			messageToClientProtobuf.Error = protoUnmarshalErr.Error()
-		} // if protoUnmarshalErr
-	} // if singleUserProfile, ok
-
-	// If a SignedPreKey which matches the client request exists in our backend storage
-	if singleUserSignedPreKey, ok := multiUserSignedPreKeyStore[requestedPreKeyBundleString]; ok {
-		// Unmarshal it into our SignedPreKey structure
-		if protoUnmarshalErr := golangProto.Unmarshal(singleUserSignedPreKey, messageToClientProtobuf.Response.PreKeyBundle.SignedPreKey); protoUnmarshalErr != nil {
-			// Fill in the error field in the message to client with the error that occured
-			messageToClientProtobuf.Error = protoUnmarshalErr.Error()
+	// If there is an error with the unmarshalling, fill in the error field in the message to client with the error that occured
+	if protoUnmarshalErr := golangProto.Unmarshal(a.profile, messageToClientProtobuf.Response.PreKeyBundle.Profile); protoUnmarshalErr != nil {
+		return "", protoUnmarshalErr
+	} // if protoUnmarshalErr
+	// If there is an error with the unmarshalling, fill in the error field in the message to client with the error that occured
+	if protoUnmarshalErr := golangProto.Unmarshal(a.signedPreKey, messageToClientProtobuf.Response.PreKeyBundle.SignedPreKey); protoUnmarshalErr != nil {
+		return "", protoUnmarshalErr
+	} // if protoUnmarshalErr != nil
+	// Use a single oneTimePreKey
+	for _, oneTimePreKey := range a.oneTimePreKeys {
+		// If there is an error with the unmarshalling, fill in the error field in the message to client with the error that occured
+		if protoUnmarshalErr := golangProto.Unmarshal(oneTimePreKey, messageToClientProtobuf.Response.PreKeyBundle.OneTimePreKey); protoUnmarshalErr != nil {
+			return "", protoUnmarshalErr
 		} // if protoUnmarshalErr != nil
-	} // if singleUserSignedPreKey, ok
-
-	// If OneTimePreKeys which match the client request exist in our backend storage
-	if singleUserOneTimePreKeys, ok := multiUserOneTimePreKeys[requestedPreKeyBundleString]; ok {
-		// Create a variable to temporarily store a single OneTimePreKey
-		var singleUserOneTimePreKey []byte
-		// Take the first OneTimePreKey from the slice
-		for _, singleUserOneTimePreKey = range singleUserOneTimePreKeys {
-			// Break out from the for loop after taking the first OneTimePreKey from the slice
-			break
-		} // for _, singleUserOneTimePreKey
-		if protoUnmarshalErr := golangProto.Unmarshal(singleUserOneTimePreKey, messageToClientProtobuf.Response.PreKeyBundle.OneTimePreKey); protoUnmarshalErr != nil {
-			// Fill in the error field in the message to client with the error that occured
-			messageToClientProtobuf.Error = protoUnmarshalErr.Error()
-		} // if protoUnmarshalErr
-	} // if singleUserOneTimePreKeys, ok
-
+		// break after using a single oneTimePreKey
+		break
+	} // for _, oneTimePreKey := range a.oneTimePreKeys {
 	// Use protobufs to marshal our message structure so that we can send it over the websocket connection
 	messageToClientProtobufBytes, messageToClientProtobufErr = golangProto.Marshal(&messageToClientProtobuf)
 	// If there is an error while trying to perform protobuf marshaling
@@ -315,10 +453,12 @@ func deliverRequestedPreKeyBundle(websocketConnection *gorillaWebSocket.Conn, re
 		messageToClientProtobufBytes, messageToClientProtobufErr = golangProto.Marshal(&messageToClientProtobuf)
 	} // if protobufMessageToClientErr != nil {
 	// Send our message over the websocket connection
-	return websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientProtobufBytes)
+	// Restore the temporary snapshot of the original authenticatedClientFirestore
+	usedOneTimePreKey := fmt.Sprint(messageToClientProtobuf.Response.PreKeyBundle.OneTimePreKey.TimeStamp)
+	return usedOneTimePreKey, a.websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientProtobufBytes)
 }
 
-func deliverMessages(websocketConnection *gorillaWebSocket.Conn, messagesToBeDelivered [][]byte) {
+func (a authenticatedClientFirestore) deliverMessages(messagesToBeDelivered [][]byte) error {
 	// Initialize an empty variable to hold the marshaled protobuf bytes
 	var messageToClientProtobufBytes []byte
 	// Initialize an empty variable to hold a protobuf error in case there is one
@@ -335,7 +475,7 @@ func deliverMessages(websocketConnection *gorillaWebSocket.Conn, messagesToBeDel
 		singleMessageToBeDeliveredProtobuf := backendProtobuf.ChatMessage{}
 		// Unmarshal the singleMessageToBeDelivered to the singleMessageToBeDeliveredProtobuf structure
 		if protoUnmarshalErr := golangProto.Unmarshal(singleMessageToBeDelivered, &singleMessageToBeDeliveredProtobuf); protoUnmarshalErr != nil {
-			messageToClientProtobuf.Error = protoUnmarshalErr.Error()
+			return protoUnmarshalErr
 		} // if protoUnmarshalErr
 		// Append the message  to the []*backendProtobuf.ChatMessage{} slice
 		messageToClientProtobuf.Request.Messages = append(messageToClientProtobuf.Request.Messages, &singleMessageToBeDeliveredProtobuf)
@@ -344,18 +484,13 @@ func deliverMessages(websocketConnection *gorillaWebSocket.Conn, messagesToBeDel
 	messageToClientProtobufBytes, messageToClientProtobufErr = golangProto.Marshal(&messageToClientProtobuf)
 	// If we encounter an error while marshaling the protobuf message structure
 	if messageToClientProtobufErr != nil {
-		// Overwrite the current message structure which caused the error with an empty one in hopes that an empty one wont cause an error
-		messageToClientProtobuf = backendProtobuf.BackendMessage{}
-		// Append the error that we encountered when trying to protobuf marshal the original message structure
-		messageToClientProtobuf.Error = messageToClientProtobufErr.Error()
-		// Attempt to marshal the protobuf message structure again which only contains the error we originally encountered so that the client knows there was an error
-		messageToClientProtobufBytes, messageToClientProtobufErr = golangProto.Marshal(&messageToClientProtobuf)
+		return messageToClientProtobufErr
 	}
 	// Send the mashalled protobuf message structure over the websocket connection
-	if writeMessageErr := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientProtobufBytes); writeMessageErr != nil {
-		log.Println(writeMessageErr)
+	if writeMessageErr := a.websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientProtobufBytes); writeMessageErr != nil {
+		return writeMessageErr
 	} // if writeMessageErr
-
+	return nil
 } // func deliverMessages
 
 func requestAuth(websocketConnection *gorillaWebSocket.Conn) ([]byte, error) {
@@ -436,3 +571,45 @@ func requestAuth(websocketConnection *gorillaWebSocket.Conn) ([]byte, error) {
 	// If cryptoEd25519.Verify() failed to verify the signature, return a matching reponse
 	return nil, errors.New("Invalid Signature")
 } // func requestAuth
+
+func logError(priority syslog.Priority, err error) {
+	// If the environment variable for the papertrail url is not set
+	if papertrailURL == "" {
+		// Use default logging
+		logDefault(priority, err)
+		return
+	} // if papertrailURL == ""
+	// Establish connection to the remote papertrail url
+	papertrail, papertrailErr := syslog.Dial("udp", papertrailURL, syslog.LOG_EMERG|syslog.LOG_KERN, "panthalassa-chat-backend")
+	// if there is an error, log the error normally and return
+	if papertrailErr != nil {
+		logDefault(syslog.LOG_EMERG, papertrailErr)
+		return
+	}
+	// Use different logging functions depending on the error priority
+	switch priority {
+	case syslog.LOG_EMERG:
+		papertrail.Emerg(err.Error())
+	case syslog.LOG_ALERT:
+		papertrail.Alert(err.Error())
+	case syslog.LOG_CRIT:
+		papertrail.Crit(err.Error())
+	case syslog.LOG_ERR:
+		papertrail.Err(err.Error())
+	case syslog.LOG_WARNING:
+		papertrail.Warning(err.Error())
+	case syslog.LOG_NOTICE:
+		papertrail.Notice(err.Error())
+	case syslog.LOG_INFO:
+		papertrail.Info(err.Error())
+	case syslog.LOG_DEBUG:
+		papertrail.Debug(err.Error())
+	default:
+		papertrail.Err(err.Error())
+	} // switch priority {
+} // func logError
+
+func logDefault(priority syslog.Priority, err error) {
+	// Use default logging
+	log.Println(priority, err)
+}
