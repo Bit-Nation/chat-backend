@@ -196,6 +196,24 @@ func (a *authenticatedClientFirestore) getClientDataFromStorage() (*authenticate
 	return a, nil
 } // func getClientDataFromDatastore
 
+func (a *authenticatedClientFirestore) echoMessagesBackToClient(messagesFromClient []*backendProtobuf.ChatMessage) error {
+	// For each message received from client
+	for _, singleMessageFromClient := range messagesFromClient {
+		// Use protobuf to marshal the message into bytes so that we can store it easily
+		chatMessageProtobufBytes, chatMessageProtobufError := golangProto.Marshal(singleMessageFromClient)
+		// If there is an error while marshaling the individual message from the client, return it
+		if chatMessageProtobufError != nil {
+			return chatMessageProtobufError
+		} // if chatMessageProtobufError != nil
+		// Echo back the same message we received from the client back to him so that we inform him that we handled the message correctly
+		if writeMessageError := a.websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, chatMessageProtobufBytes); writeMessageError != nil {
+			// If there is an error while sending a message to a client
+			return writeMessageError
+		} // if writeMessageError != nil
+	} // for _, singleMessageFromClient
+	return nil
+} // func (a *authenticatedClientFirestore) persistChatMessages
+
 func (a *authenticatedClientFirestore) persistChatMessagesFromClient(messagesFromClient []*backendProtobuf.ChatMessage) error {
 	// For each message received from client
 	for _, singleMessageFromClient := range messagesFromClient {

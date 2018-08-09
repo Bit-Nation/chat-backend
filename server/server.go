@@ -24,9 +24,11 @@ import (
 
 var papertrailURL = os.Getenv("PAPERTRAIL")
 var production = os.Getenv("PRODUCTION")
+var authenticatedClientWebSocketConnectionMap = make(map[string]*gorillaWebSocket.Conn)
 
 // StartWebSocketServer starts the websocket server
 func StartWebSocketServer() {
+
 	// Get the port on which the chat backend should be listening on
 	listenPort := os.Getenv("PORT")
 	// Create new gorillaRouter
@@ -162,6 +164,8 @@ func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 	} // if websocketConnectionRequestAuthErr != nil
 	// Only set the authenticatedIdentityPublicKeyHex once authentication has been successful
 	authenticatedClient.authenticatedIdentityPublicKeyHex = hex.EncodeToString(authenticatedIdentityPublicKeyClient)
+	// Store the connection of an authenticated client so that other clients can interact with him in real time
+	authenticatedClientWebSocketConnectionMap[authenticatedClient.authenticatedIdentityPublicKeyHex] = websocketConnection
 	// If it's a dev enviroment, log verbose info
 	if production == "" {
 		logError(syslog.LOG_INFO, errors.New(authenticatedClient.authenticatedIdentityPublicKeyHex+" Auth Successful"))
@@ -183,6 +187,7 @@ func authenticatedWebsocketConnection(storage storageInterface) {
 	if len(authenticatedClient.messagesToBeDelivered) > 0 {
 		// If there are no errors while deliveing the messages to the client
 		if deliverMessagesErr := authenticatedClient.deliverMessages(authenticatedClient.messagesToBeDelivered); deliverMessagesErr == nil {
+			// @TODO Maybe require the client to echo the message we sent to him as a confirmation that he handled it successfully
 			// If there are no errors while deleteing the messages which were delivered
 			// If it's a dev enviroment, log verbose info
 			if production == "" {
@@ -193,7 +198,7 @@ func authenticatedWebsocketConnection(storage storageInterface) {
 			} // if deleteFromFieldErr
 			// If it's a dev enviroment, log verbose info
 			if production == "" {
-				logError(syslog.LOG_INFO, errors.New(authenticatedClient.authenticatedIdentityPublicKeyHex+" Deleting Messages : "+strconv.Itoa(len(authenticatedClient.messagesToBeDelivered))))
+				logError(syslog.LOG_INFO, errors.New(authenticatedClient.authenticatedIdentityPublicKeyHex+" Deleting Messages from storage : "+strconv.Itoa(len(authenticatedClient.messagesToBeDelivered))))
 			} // if production == ""
 		} // if deliverMessagesErr == nil
 	} // if len(messagesToBeDelivered > 0)
@@ -219,6 +224,7 @@ func authenticatedWebsocketConnection(storage storageInterface) {
 	logError(syslog.LOG_INFO, errors.New("terminating websocket connection to client"))
 	// Close the websocket connection
 	authenticatedClient.websocketConnection.Close()
+	delete(authenticatedClientWebSocketConnectionMap, authenticatedClient.authenticatedIdentityPublicKeyHex)
 	return
 	// Read first message from client
 } // func authenticatedWebsocketConnection
@@ -282,6 +288,36 @@ func (a *authenticatedClientFirestore) processEvent(eventsProcessed int) error {
 		// Inner switch in case we have a Request from client, cases are valid if they are true
 		switch {
 		case messageFromClientProtobuf.Request.Messages != nil:
+			for _, singleMessage := range messageFromClientProtobuf.Request.Messages {
+				// Store the intendedMessageReciepint in a variable to avoid calling hex.EncodeToString multiple times
+				intendedMessageReciepient := hex.EncodeToString(singleMessage.Receiver)
+				// If the intended message recipient has an active connection to the backend
+				if websocketConnectionMessageRecipient, exists := authenticatedClientWebSocketConnectionMap[intendedMessageReciepient]; exists {
+					// Attempt to send the messages messages directly, in case of an error
+					if production == "" {
+						logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Attempting to send a real time message to : "+intendedMessageReciepient))
+					} // if production == ""
+					// Echo the received messages back to client so that we confirm that we handled them corectly
+					if echoMessagesBackToClientErr := a.echoMessagesBackToClient(messageFromClientProtobuf.Request.Messages); echoMessagesBackToClientErr != nil {
+						// If there is an error in confirming that the messages were handled correctly, just log the error as we already have the messages
+						logError(syslog.LOG_ERR, echoMessagesBackToClientErr)
+					} // if echoMessagesBackToClientErr
+					// If there is an error sending the message in real time to the intendedMessageRecipient
+					if writeMessageErr := websocketConnectionMessageRecipient.WriteMessage(gorillaWebSocket.BinaryMessage, messageFromClientBytes); writeMessageErr != nil {
+						// Log the error and continue persisting the message to the backend
+						logError(syslog.LOG_ERR, writeMessageErr)
+						// Else in case of no error
+					} else {
+						if production == "" {
+							for _, singleMessage := range messageFromClientProtobuf.Request.Messages {
+								logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Not persisting message on backend as successfuly sent it in real time to : "+hex.EncodeToString(singleMessage.Receiver)))
+							} // for _, singleMessage
+						} // if production == ""
+						// Return nil and don't persist the message to the backend
+						return writeMessageErr
+					} // else
+				} // if websocketConnectionMessageRecipient, exists
+			} // for _, singleMessage
 			persistChatMessagesFromClientErr := a.persistChatMessagesFromClient(messageFromClientProtobuf.Request.Messages)
 			// If there was no error while persisting the messages
 			if persistChatMessagesFromClientErr == nil {
@@ -289,7 +325,7 @@ func (a *authenticatedClientFirestore) processEvent(eventsProcessed int) error {
 				for _, singleMessageFromClient := range messageFromClientProtobuf.Request.Messages {
 					// If we are in dev mode, log each persisted event
 					if production == "" {
-						logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Persisted message meant for : "+hex.EncodeToString(singleMessageFromClient.Receiver)))
+						logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Persisted message meant for offline client : "+hex.EncodeToString(singleMessageFromClient.Receiver)))
 					} // if production == ""
 				} // for singleMessageFromClient := range messageFromClientProtobuf.Request.Messages {
 			} // persistChatMessagesFromClientErr
@@ -313,7 +349,8 @@ func (a *authenticatedClientFirestore) processEvent(eventsProcessed int) error {
 					logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Delivered preKeyBundle which belongs to : "+hex.EncodeToString(messageFromClientProtobuf.Request.PreKeyBundle)))
 					logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Deleted consumed oneTimePreKey with id : "+usedOneTimePreKey+" which belongs to : "+hex.EncodeToString(messageFromClientProtobuf.Request.PreKeyBundle)))
 				} // if production == ""
-				a.deleteFieldFromStorage("oneTimePreKeys", usedOneTimePreKey)
+				// Delete the oneTimePreKey which got consumed
+				authenticatedClientForPreKeyBundle.deleteFieldFromStorage("oneTimePreKeys", usedOneTimePreKey)
 			} // if deliverRequestedPreKeyBundleErr
 			return deliverRequestedPreKeyBundleErr
 		case messageFromClientProtobuf.Request.Auth != nil:
@@ -363,6 +400,7 @@ func (a *authenticatedClientFirestore) processEvent(eventsProcessed int) error {
 
 		if messageFromClientProtobuf.RequestID == "" {
 			a.websocketConnection.Close()
+			delete(authenticatedClientWebSocketConnectionMap, a.authenticatedIdentityPublicKeyHex)
 		}
 	}
 	return nil

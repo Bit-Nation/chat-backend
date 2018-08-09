@@ -95,6 +95,34 @@ func TestHandleWebSocketConnection(t *testing.T) {
 	clientReceiver.testUploadOneTimePreKeys(t)
 	// Receiver uploads the signed pre key
 	clientReceiver.testUploadSignedPreKey(t)
+
+	// Receiver receives any real time messages while he is online
+	go func() {
+		if production == "" {
+			logError(syslog.LOG_INFO, errors.New(hex.EncodeToString(clientReceiver.Profile.Information.IdentityPubKey)+" *C 1* Waiting for real time messages"))
+		} // if production == ""
+		// Listen for real time messages, will block untill messages arrive
+		unreadChatMessages := clientReceiver.receiveUndeliveredMessages(t)
+		if production == "" {
+			logError(syslog.LOG_INFO, errors.New(hex.EncodeToString(clientReceiver.Profile.Information.IdentityPubKey)+" *C 1* Successfully received real time messages"))
+		} // if production == ""
+		// Test if we can decrypt the message successfully
+		expectedDecryptedMessages := []string{"SECRETMESSAGENEW1"}
+		// For each message that we want to read
+		for index, unreadChatMessage := range unreadChatMessages {
+			// Try to decrypt them and read them
+			clientReceiver.testReadDoubleRatchetMessages(t, unreadChatMessage, expectedDecryptedMessages[index])
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(hex.EncodeToString(clientReceiver.Profile.Information.IdentityPubKey)+" *C 1* Successfully decrypted and read real time messages : "+strconv.Itoa(index+1)))
+			} // if production == ""
+		} // for index, unreadChatMessage
+		// Close connection on purpose to test message exchange while client is offline
+		if production == "" {
+			logError(syslog.LOG_INFO, errors.New(hex.EncodeToString(clientReceiver.Profile.Information.IdentityPubKey)+" *C 1* Going offline on purpose to test receiving persisted messages"))
+		} // if production == ""
+		clientReceiver.WebSocketConnection.Close()
+	}()
+
 	// Initial message sender needs to pass authentication
 	clientSender.testAuth(t)
 	// Get a hex decoded byte representation of the identity public key for the initial message receiver that we want to chat with
@@ -102,6 +130,10 @@ func TestHandleWebSocketConnection(t *testing.T) {
 	testifyRequire.Nil(t, identityPublicKeyBytesErr)
 	// Initial message sender needs to request the pre key bundle of the receiver
 	remotePreKeyBundlePublic := clientSender.testRequestPreKeyBundle(t, identityPublicKeyBytes)
+	// Initial message sender sends a message to the backend to get persisted
+	clientSender.testSendMessage(t, remotePreKeyBundlePublic)
+	// Allow a bit of time for the real time message to be read and for the client to disconnect on purpose so we can test the offline one
+	time.Sleep(5 * time.Second)
 	// Initial message sender sends a message to the backend to get persisted
 	clientSender.testSendMessage(t, remotePreKeyBundlePublic)
 	// Receiver needs to pass auth again
@@ -115,7 +147,7 @@ func TestHandleWebSocketConnection(t *testing.T) {
 		// Try to decrypt them and read them
 		clientReceiverRestartedApp.testReadDoubleRatchetMessages(t, unreadChatMessage, expectedDecryptedMessages[index])
 		if production == "" {
-			logError(syslog.LOG_INFO, errors.New(hex.EncodeToString(clientReceiverRestartedApp.Profile.Information.IdentityPubKey)+" Successfully decrypted and read messages : "+strconv.Itoa(index+1)))
+			logError(syslog.LOG_INFO, errors.New(hex.EncodeToString(clientReceiverRestartedApp.Profile.Information.IdentityPubKey)+" *C 2* Successfully decrypted and read persisted messages : "+strconv.Itoa(index+1)))
 		} // if production == ""
 	} // for index, unreadChatMessage
 	// Leave some time for the background tasks to finish
