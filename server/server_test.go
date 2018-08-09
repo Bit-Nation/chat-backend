@@ -371,7 +371,7 @@ func (c *Client) testSendMessage(t *testing.T, receiverPreKeyBundlePublic PreKey
 	// Initialize our Message structure to send a request to the backend
 	messageToBackendProto := backendProtobuf.BackendMessage{}
 	// Set a request id
-	messageToBackendProto.RequestID = "@TODO"
+	messageToBackendProto.RequestID = uuid.NewV4().String()
 	// Initialize an empty Request structure
 	messageToBackendProto.Request = &backendProtobuf.BackendMessage_Request{}
 	// Create a key store for the message Sender using the mnemonic from the client
@@ -427,7 +427,6 @@ func (c *Client) testSendMessage(t *testing.T, receiverPreKeyBundlePublic PreKey
 	// Set the Message to the doube Ratchet message
 	chatMessageSender.Message = &protobufDoubleRatchetMsgSender
 	// Set the message receiver to message Receiver IdentityKey from his PreKeyBundle
-	// @TODO : encode to hex?
 	chatMessageSender.Receiver = []byte(receiverPreKeyBundlePublic.BundleIdentityKey)
 	// Set the message sender to the message Sender IdentityKey
 	chatMessageSender.Sender = []byte(identityPublicKeySenderHex)
@@ -475,7 +474,7 @@ func (c *Client) testRequestPreKeyBundle(t *testing.T, preKeyBundleIdentifier []
 	// Initialize our Message structure to send a request to the backend
 	messageToBackendProto := backendProtobuf.BackendMessage{}
 	// Set a request id
-	messageToBackendProto.RequestID = "@TODO"
+	messageToBackendProto.RequestID = uuid.NewV4().String()
 	// Initialize an empty Request structure
 	messageToBackendProto.Request = &backendProtobuf.BackendMessage_Request{}
 	// Fill in the key of the client we want to requirest a pre key bundle for so that we can chat with
@@ -632,7 +631,7 @@ func (c *Client) testAuth(t *testing.T) {
 	// Initialize an empty Auth structure
 	messageToBackend.Response.Auth = &backendProtobuf.BackendMessage_Auth{}
 	// Set the type of request we are replying to
-	messageToBackend.RequestID = "@TODO"
+	messageToBackend.RequestID = uuid.NewV4().String()
 	// Read the data from the server which should contain the byte sequence we need to sign
 	_, messageFromBackendBytes, readMessageErr := c.WebSocketConnection.ReadMessage()
 	testifyRequire.Nil(t, readMessageErr)
