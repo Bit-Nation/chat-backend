@@ -293,25 +293,22 @@ func (a *authenticatedClientFirestore) processEvent(eventsProcessed int) error {
 				intendedMessageReciepient := hex.EncodeToString(singleMessage.Receiver)
 				// If the intended message recipient has an active connection to the backend
 				if websocketConnectionMessageRecipient, exists := authenticatedClientWebSocketConnectionMap[intendedMessageReciepient]; exists {
-					// Attempt to send the messages messages directly, in case of an error
 					if production == "" {
 						logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Attempting to send a real time message to : "+intendedMessageReciepient))
 					} // if production == ""
-					// Echo the received messages back to client so that we confirm that we handled them corectly
+					// Echo the received messages back to the message sender so that we confirm that we handled them corectly
 					if echoMessagesBackToClientErr := a.echoMessagesBackToClient(messageFromClientProtobuf.Request.Messages); echoMessagesBackToClientErr != nil {
 						// If there is an error in confirming that the messages were handled correctly, just log the error as we already have the messages
 						logError(syslog.LOG_ERR, echoMessagesBackToClientErr)
 					} // if echoMessagesBackToClientErr
-					// If there is an error sending the message in real time to the intendedMessageRecipient
+					// // Attempt to send the messages messages in real time to the intendedMessageRecipient, in case of an error
 					if writeMessageErr := websocketConnectionMessageRecipient.WriteMessage(gorillaWebSocket.BinaryMessage, messageFromClientBytes); writeMessageErr != nil {
 						// Log the error and continue persisting the message to the backend
 						logError(syslog.LOG_ERR, writeMessageErr)
 						// Else in case of no error
 					} else {
 						if production == "" {
-							for _, singleMessage := range messageFromClientProtobuf.Request.Messages {
-								logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Not persisting message on backend as successfuly sent it in real time to : "+hex.EncodeToString(singleMessage.Receiver)))
-							} // for _, singleMessage
+							logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Not persisting message on backend as successfuly sent it in real time to : "+intendedMessageReciepient))
 						} // if production == ""
 						// Return nil and don't persist the message to the backend
 						return writeMessageErr

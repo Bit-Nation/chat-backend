@@ -40,6 +40,9 @@ type Client struct {
 }
 
 func TestHandleWebSocketConnection(t *testing.T) {
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New("STARTING TESTS"))
+	} // if production == ""
 	// Get the port on which the chat backend should be listening on
 	listenPort := os.Getenv("PORT")
 	// Start the websocket server
@@ -107,7 +110,7 @@ func TestHandleWebSocketConnection(t *testing.T) {
 			logError(syslog.LOG_INFO, errors.New(hex.EncodeToString(clientReceiver.Profile.Information.IdentityPubKey)+" *C 1* Successfully received real time messages"))
 		} // if production == ""
 		// Test if we can decrypt the message successfully
-		expectedDecryptedMessages := []string{"SECRETMESSAGENEW1"}
+		expectedDecryptedMessages := []string{"SECRETMESSAGENEW1", "SECRETMESSAGENEW1", "SECRETMESSAGENEW1"}
 		// For each message that we want to read
 		for index, unreadChatMessage := range unreadChatMessages {
 			// Try to decrypt them and read them
@@ -141,7 +144,7 @@ func TestHandleWebSocketConnection(t *testing.T) {
 	// Receiver receives any undelivered messages while he was offline
 	unreadChatMessages := clientReceiverRestartedApp.receiveUndeliveredMessages(t)
 	// Test if we can decrypt the message successfully
-	expectedDecryptedMessages := []string{"SECRETMESSAGENEW1"}
+	expectedDecryptedMessages := []string{"SECRETMESSAGENEW1", "SECRETMESSAGENEW1", "SECRETMESSAGENEW1"}
 	// For each message that we want to read
 	for index, unreadChatMessage := range unreadChatMessages {
 		// Try to decrypt them and read them
@@ -438,7 +441,17 @@ func (c *Client) testSendMessage(t *testing.T, receiverPreKeyBundlePublic PreKey
 	// @TODO : setup proper versioning?
 	chatMessageSender.Version = 1
 	// Append the message to the slice of messages in our request
-	messageToBackendProto.Request.Messages = append(messageToBackendProto.Request.Messages, &chatMessageSender)
+
+	// Change the message id so that it stores it as a unique message on the backend storage
+	chatMessageSenderNewMessageID1 := chatMessageSender
+	chatMessageSenderNewMessageID2 := chatMessageSender
+	chatMessageSenderNewMessageID3 := chatMessageSender
+	chatMessageSenderNewMessageID1.MessageID = []byte(uuid.NewV4().String())
+	chatMessageSenderNewMessageID2.MessageID = []byte(uuid.NewV4().String())
+	chatMessageSenderNewMessageID3.MessageID = []byte(uuid.NewV4().String())
+	messageToBackendProto.Request.Messages = append(messageToBackendProto.Request.Messages, &chatMessageSenderNewMessageID1)
+	messageToBackendProto.Request.Messages = append(messageToBackendProto.Request.Messages, &chatMessageSenderNewMessageID2)
+	messageToBackendProto.Request.Messages = append(messageToBackendProto.Request.Messages, &chatMessageSenderNewMessageID3)
 	// Marshal our protobuf ChatMessage structure so that we can send it via our websocket connection
 	messageToBackendProtoBytes, messageToBackendProtoBytesErr := golangProto.Marshal(&messageToBackendProto)
 	testifyRequire.Nil(t, messageToBackendProtoBytesErr)
