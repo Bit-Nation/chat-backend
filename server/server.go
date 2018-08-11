@@ -359,7 +359,6 @@ func (a *authenticatedClientFirestore) processEvent(eventsProcessed int) error {
 		switch {
 		case messageFromClientProtobuf.Response.Auth != nil:
 			return errors.New("Authentication should not be handled here")
-
 		case messageFromClientProtobuf.Response.OneTimePrekeys != nil:
 			persistOneTimePreKeysFromClientErr := a.persistOneTimePreKeysFromClient(messageFromClientProtobuf.Response.OneTimePrekeys)
 			// If no error was encountered while persisting the oneTimePreKeys from the client
@@ -485,7 +484,7 @@ func (a authenticatedClientFirestore) deliverMessages(messagesToBeDelivered [][]
 	// If we encounter an error while marshaling the protobuf message structure
 	if messageToClientProtobufErr != nil {
 		return messageToClientProtobufErr
-	}
+	} // if messageToClientProtobufErr
 	// Send the mashalled protobuf message structure over the websocket connection
 	if writeMessageErr := a.websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientProtobufBytes); writeMessageErr != nil {
 		return writeMessageErr
@@ -534,9 +533,12 @@ func requestAuth(websocketConnection *gorillaWebSocket.Conn) ([]byte, error) {
 	identityPublicKey := [32]byte{}
 	// Create a [64]byte{} byteSequenceToSignSignature to satisfy cryptoEd25519.Verify() type requirements
 	byteSequenceToSignSignature := [64]byte{}
+	// Make sure that Auth has be filled by client to avoid potential panics
+	if messageFromClient.Response.Auth == nil {
+		return nil, errors.New("Auth must not be empty")
+	} // if messageFromClient.Response.Auth
 	// Create a string representation of the Identity Public Key
 	identityPublicKeyBytes := messageFromClient.Response.Auth.IdentityPublicKey
-	// Decode the hex representation of the identityPublicKey here as transmitting it over the network without hex encoding can cause issues with some clients
 	// Get the byte sequence which was signed by the client
 	byteSequenceThatClientSigned := messageFromClient.Response.Auth.ToSign
 	if len(byteSequenceThatClientSigned) != 8 {
@@ -546,7 +548,7 @@ func requestAuth(websocketConnection *gorillaWebSocket.Conn) ([]byte, error) {
 	if !bytes.HasPrefix(byteSequenceThatClientSigned, backendRandomBytes) {
 		// If the client has modified the bytes we sent, return an error pointing out that this behavior is not allowed
 		return nil, errors.New("Client is only allowed to append a byte sequence, and not to modify the one which was sent")
-	}
+	} // if !bytes.HasPrefix
 	// Make sure that the identityPublicKey is exactly 32 bytes
 	if len(identityPublicKeyBytes) != 32 {
 		return nil, errors.New("identityPublicKey should be exactly 32 bytes")
