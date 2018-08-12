@@ -317,6 +317,9 @@ func (a *authenticatedClientFirestore) processEvent(eventsProcessed int) (string
 			} // if protoUnmarshalErr
 			persistSignedPreKeyFromClientErr := a.persistSignedPreKeyFromClient(&preKey)
 			if persistSignedPreKeyFromClientErr == nil {
+				if confirmationErr := sendConfirmationToClient(messageFromClientProtobuf.RequestID, a.websocketConnection); confirmationErr != nil {
+					return messageFromClientProtobuf.RequestID, confirmationErr
+				} // if confirmationErr
 				// If we are not in a production environment, verbose log the signedPreKey persistance
 				if production == "" {
 					logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Persisted signedPreKey with id : "+fmt.Sprint(messageFromClientProtobuf.Response.SignedPreKey.TimeStamp)+" which belongs to : "+hex.EncodeToString(messageFromClientProtobuf.Response.SignedPreKey.IdentityKey)))
@@ -335,11 +338,6 @@ func (a *authenticatedClientFirestore) processEvent(eventsProcessed int) (string
 					if production == "" {
 						logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Attempting to send a real time message to : "+intendedMessageReciepient))
 					} // if production == ""
-					// Echo the received messages back to the message sender so that we confirm that we handled them corectly
-					if echoMessagesBackToClientErr := a.echoMessagesBackToClient(messageFromClientProtobuf.Request.Messages); echoMessagesBackToClientErr != nil {
-						// If there is an error in confirming that the messages were handled correctly, just log the error as we already have the messages
-						logError(syslog.LOG_ERR, echoMessagesBackToClientErr)
-					} // if echoMessagesBackToClientErr
 					// // Attempt to send the messages messages in real time to the intendedMessageRecipient, in case of an error
 					if writeMessageErr := websocketConnectionMessageRecipient.WriteMessage(gorillaWebSocket.BinaryMessage, messageFromClientBytes); writeMessageErr != nil {
 						// Log the error and continue persisting the message to the backend
@@ -350,6 +348,9 @@ func (a *authenticatedClientFirestore) processEvent(eventsProcessed int) (string
 							logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Not persisting message on backend as successfuly sent it in real time to : "+intendedMessageReciepient))
 						} // if production == ""
 						// Return nil and don't persist the message to the backend
+						if confirmationErr := sendConfirmationToClient(messageFromClientProtobuf.RequestID, a.websocketConnection); confirmationErr != nil {
+							return messageFromClientProtobuf.RequestID, confirmationErr
+						} // if confirmationErr
 						return  messageFromClientProtobuf.RequestID, writeMessageErr
 					} // else
 				} // if websocketConnectionMessageRecipient, exists
@@ -357,6 +358,9 @@ func (a *authenticatedClientFirestore) processEvent(eventsProcessed int) (string
 			persistChatMessagesFromClientErr := a.persistChatMessagesFromClient(messageFromClientProtobuf.Request.Messages)
 			// If there was no error while persisting the messages
 			if persistChatMessagesFromClientErr == nil {
+				if confirmationErr := sendConfirmationToClient(messageFromClientProtobuf.RequestID, a.websocketConnection); confirmationErr != nil {
+					return messageFromClientProtobuf.RequestID, confirmationErr
+				} // if confirmationErr
 				// For each message that was persisted
 				for _, singleMessageFromClient := range messageFromClientProtobuf.Request.Messages {
 					// If we are in dev mode, log each persisted event
@@ -420,6 +424,9 @@ func (a *authenticatedClientFirestore) processEvent(eventsProcessed int) (string
 			persistOneTimePreKeysFromClientErr := a.persistOneTimePreKeysFromClient(messageFromClientProtobuf.Response.OneTimePrekeys)
 			// If no error was encountered while persisting the oneTimePreKeys from the client
 			if persistOneTimePreKeysFromClientErr == nil {
+				if confirmationErr := sendConfirmationToClient(messageFromClientProtobuf.RequestID, a.websocketConnection); confirmationErr != nil {
+					return messageFromClientProtobuf.RequestID, confirmationErr
+				} // if confirmationErr
 				// If we are not in a production environment, verbose log each oneTimePreKey persistance
 				if production == "" {
 					for _, oneTimePreKeyFromClient := range messageFromClientProtobuf.Response.OneTimePrekeys {
@@ -439,6 +446,9 @@ func (a *authenticatedClientFirestore) processEvent(eventsProcessed int) (string
 			} // if production == "")
 			persistSignedPreKeyFromClientErr := a.persistSignedPreKeyFromClient(messageFromClientProtobuf.Response.SignedPreKey)
 			if persistSignedPreKeyFromClientErr == nil {
+				if confirmationErr := sendConfirmationToClient(messageFromClientProtobuf.RequestID, a.websocketConnection); confirmationErr != nil {
+					return messageFromClientProtobuf.RequestID, confirmationErr
+				} // if confirmationErr
 				// If we are not in a production environment, verbose log the signedPreKey persistance
 				if production == "" {
 					logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Persisted signedPreKey with id : "+fmt.Sprint(messageFromClientProtobuf.Response.SignedPreKey.TimeStamp)+" which belongs to : "+hex.EncodeToString(messageFromClientProtobuf.Response.SignedPreKey.IdentityKey)))
@@ -670,10 +680,10 @@ func requestAuth(websocketConnection *gorillaWebSocket.Conn) ([]byte, string, er
 		if production == "" {
 			logError(syslog.LOG_INFO, errors.New("OK Auth signature was verified, echoing authentication attempt back to the client so that he knows it was successful"))
 		} // if production == ""
-		// If the signed byte sequence from client has a valid signature, echo the authentication attempt back to the client so that he knows it was successful
-		if writeMessageError := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageFromClientProto); writeMessageError != nil {
-			return nil, messageToClient.RequestID, writeMessageError
-		} // if writeMessageError
+		// Send confirmation to the client
+		if confirmationErr := sendConfirmationToClient(messageToClient.RequestID, websocketConnection); confirmationErr != nil {
+			return nil, messageToClient.RequestID, confirmationErr
+		} // if confirmationErr
 		if production == "" {
 			logError(syslog.LOG_INFO, errors.New("OK Auth echoing authentication attempt succeeded"))
 		} // if production == ""
@@ -684,6 +694,22 @@ func requestAuth(websocketConnection *gorillaWebSocket.Conn) ([]byte, string, er
 	return nil, messageToClient.RequestID, errors.New("Invalid Signature")
 } // func requestAuth
 
+func sendConfirmationToClient(requestID string, websocketConnection *gorillaWebSocket.Conn) error {
+	// Create a structure to send to client
+	var messageToClientProtobuf backendProtobuf.BackendMessage
+	// Set the request id which completeed successfully
+	messageToClientProtobuf.RequestID =  requestID
+	// Marshal using protobuf to conform to what client is expecting from us
+	messageToClientProtobufBytes, messageToClientProtobufBytesErr := golangProto.Marshal(&messageToClientProtobuf);
+	if messageToClientProtobufBytesErr != nil {
+		return messageToClientProtobufBytesErr
+	} // if messageToClientProtobufBytes
+	// Send the .RequestID back to the client so that he knows it was successful
+	if writeMessageError := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientProtobufBytes); writeMessageError != nil {
+		return writeMessageError
+	} // if writeMessageError
+	return nil
+} // func sendConfirmationToClient
 func logError(priority syslog.Priority, err error) {
 	// If the environment variable for the papertrail url is not set
 	if papertrailURL == "" {

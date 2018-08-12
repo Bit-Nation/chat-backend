@@ -289,10 +289,13 @@ func newClient(t *testing.T, name, location, image, mnemonicString, websocketURL
 } // func newClient
 
 func (c *Client) testUploadOneTimePreKeys(t *testing.T) {
+	messageFromBackend := backendProtobuf.BackendMessage{}
 	// Initialize our Message structure to send a request to the backend
 	messageToBackendProtobuf := backendProtobuf.BackendMessage{}
 	// Initialize an empty Response structure
 	messageToBackendProtobuf.Response = &backendProtobuf.BackendMessage_Response{}
+	// Add the request id
+	messageToBackendProtobuf.RequestID = uuid.NewV4().String()
 	// For each oneTimePreKey
 	for _, oneTimePreKey := range c.OneTimePreKeys {
 		// Initialize an empty PreKey structure
@@ -318,21 +321,20 @@ func (c *Client) testUploadOneTimePreKeys(t *testing.T) {
 	// Send the message over the websocket connection
 	writeMessageError := c.WebSocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToBackendProtobufBytes)
 	testifyRequire.Nil(t, writeMessageError)
-	for _, oneTimePreKey := range messageToBackendProtobuf.Response.OneTimePrekeys {
-		// Read the response from the backend
-		_, messageFromBackendProtobufBytes, readMessageErr := c.WebSocketConnection.ReadMessage()
-		testifyRequire.Nil(t, readMessageErr)
-		// Marshal the one time pre key so that we can compare it with the backend response
-		oneTimePreKeyBytes, protoMarshalErr := golangProto.Marshal(oneTimePreKey)
-		testifyRequire.Nil(t, protoMarshalErr)
-		// Make sure the backend echoes back the oneTimePreKey we sent to confirm that the OneTimePreKeys were persisted
-		testifyRequire.Equal(t, messageFromBackendProtobufBytes, oneTimePreKeyBytes)
-	} // for _, oneTimePreKey
+	_, messageFromBackendProtobufBytes, readMessageErr := c.WebSocketConnection.ReadMessage()
+	testifyRequire.Nil(t, readMessageErr)
+	protoUnmarshalErr := golangProto.Unmarshal(messageFromBackendProtobufBytes, &messageFromBackend)
+	testifyRequire.Nil(t, protoUnmarshalErr)
+	testifyRequire.Equal(t, "", messageFromBackend.Error)
+	testifyRequire.Equal(t, messageFromBackend.RequestID, messageToBackendProtobuf.RequestID)
 } // testUploadOneTimePreKeys
 
 func (c *Client) testUploadSignedPreKey(t *testing.T) {
+	messageFromBackend := backendProtobuf.BackendMessage{}
 	// Initialize our Message structure to send a request to the backend
 	messageToBackendProtobuf := backendProtobuf.BackendMessage{}
+	// Add the request id
+	messageToBackendProtobuf.RequestID = uuid.NewV4().String()
 	// Initialize an empty Response structure
 	messageToBackendProtobuf.Response = &backendProtobuf.BackendMessage_Response{}
 	// Initialize an empty PreKey structure
@@ -360,14 +362,14 @@ func (c *Client) testUploadSignedPreKey(t *testing.T) {
 	// Read the response from the backend
 	_, messageFromBackendProtobufBytes, readMessageErr := c.WebSocketConnection.ReadMessage()
 	testifyRequire.Nil(t, readMessageErr)
-	// Marhsal the signedPreKey so that we can compare it with the backend response
-	signedPreKeyBytes, protoMarshalErr := golangProto.Marshal(&preKeyProtobuf)
-	testifyRequire.Nil(t, protoMarshalErr)
-	// Make sure the backend echoes back the signedPreKey we sent to confirm that the signedPreKey was persisted
-	testifyRequire.Equal(t, messageFromBackendProtobufBytes, signedPreKeyBytes)
+	protoUnmarshalErr := golangProto.Unmarshal(messageFromBackendProtobufBytes, &messageFromBackend)
+	testifyRequire.Nil(t, protoUnmarshalErr)
+	testifyRequire.Equal(t, "", messageFromBackend.Error)
+	testifyRequire.Equal(t, messageFromBackend.RequestID, messageToBackendProtobuf.RequestID)
 } // testUploadSignedPreKey
 
 func (c *Client) testSendMessage(t *testing.T, receiverPreKeyBundlePublic PreKeyBundlePublic) {
+	messageFromBackend := backendProtobuf.BackendMessage{}
 	// Initialize our Message structure to send a request to the backend
 	messageToBackendProto := backendProtobuf.BackendMessage{}
 	// Set a request id
@@ -458,16 +460,12 @@ func (c *Client) testSendMessage(t *testing.T, receiverPreKeyBundlePublic PreKey
 	writeMessageError := c.WebSocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToBackendProtoBytes)
 	testifyRequire.Nil(t, writeMessageError)
 	// For each message that we are sending to the backend
-	for _, singleMessageToBackendProtobuf := range messageToBackendProto.Request.Messages {
-		// Marshal each message in protobuf bytes
-		messageToBackendProtobufBytes, singleMessageToBackendProtobufBytesErr := golangProto.Marshal(singleMessageToBackendProtobuf)
-		testifyRequire.Nil(t, singleMessageToBackendProtobufBytesErr)
-		// Read the response from the backend
-		_, messageFromBackendProtobufBytes, readMessageErr := c.WebSocketConnection.ReadMessage()
-		testifyRequire.Nil(t, readMessageErr)
-		// Make sure the backend echoes back the messages we sent to confirm that the messages was persisted
-		testifyRequire.Equal(t, messageFromBackendProtobufBytes, messageToBackendProtobufBytes)
-	} // for _, singleMessageToBackendProtobuf := range messageToBackendgolangProto.Request.Messages
+	_, messageFromBackendProtobufBytes, readMessageErr := c.WebSocketConnection.ReadMessage()
+	testifyRequire.Nil(t, readMessageErr)
+	protoUnmarshalErr := golangProto.Unmarshal(messageFromBackendProtobufBytes, &messageFromBackend)
+	testifyRequire.Nil(t, protoUnmarshalErr)
+	testifyRequire.Equal(t, "", messageFromBackend.Error)
+	testifyRequire.Equal(t, messageFromBackend.RequestID, messageToBackendProto.RequestID)
 } // func (c *Client) testSendMessage
 
 func (c *Client) testRequestPreKeyBundle(t *testing.T, preKeyBundleIdentifier []byte) PreKeyBundlePublic {
@@ -630,14 +628,14 @@ func (c *Client) testAuth(t *testing.T) {
 	messageToBackend.Response = &backendProtobuf.BackendMessage_Response{}
 	// Initialize an empty Auth structure
 	messageToBackend.Response.Auth = &backendProtobuf.BackendMessage_Auth{}
-	// Set the type of request we are replying to
-	messageToBackend.RequestID = uuid.NewV4().String()
 	// Read the data from the server which should contain the byte sequence we need to sign
 	_, messageFromBackendBytes, readMessageErr := c.WebSocketConnection.ReadMessage()
 	testifyRequire.Nil(t, readMessageErr)
 	// Unmarshal the data from the server into our Message structure
 	protoUnmarshalErr := golangProto.Unmarshal(messageFromBackendBytes, &messageFromBackend)
 	testifyRequire.Nil(t, protoUnmarshalErr)
+	// Set the id of request we are replying to
+	messageToBackend.RequestID = messageFromBackend.RequestID
 	// Create a byte slice to store our random bytes
 	clientRandomBytes := make([]byte, 4)
 	// Read random bytes into our slice
@@ -680,8 +678,11 @@ func (c *Client) testAuth(t *testing.T) {
 	// Read back the response from the backend
 	_, messageFromBackendBytes, readMessageErr = c.WebSocketConnection.ReadMessage()
 	testifyRequire.Nil(t, readMessageErr)
-	// Make sure the backend echoes back the authentication attempt as a means to confirm that it's successful
-	testifyRequire.Equal(t, messageToBackendBytes, messageFromBackendBytes)
+	// Make sure the backend sends us back the .RequestID as a means to confirm that it's successful
+	protoUnmarshalErr = golangProto.Unmarshal(messageFromBackendBytes, &messageFromBackend)
+	testifyRequire.Nil(t, protoUnmarshalErr)
+	testifyRequire.Equal(t, "", messageFromBackend.Error)
+	testifyRequire.Equal(t, messageToBackend.RequestID, messageFromBackend.RequestID)
 
 }
 
