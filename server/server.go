@@ -532,14 +532,28 @@ func requestAuth(websocketConnection *gorillaWebSocket.Conn) ([]byte, error) {
 	if messageToClientBytesErr != nil {
 		return nil, messageToClientBytesErr
 	} // if messageToClientBytesErr != nil
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New("Sending .Auth.ToSign over websocket to client"))
+	} // if production == ""
 	// Send the protobuf data to the client containing the sequence of bytes he needs to sign
-	websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientBytes)
+	if writeMessageErr := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientBytes); writeMessageErr != nil {
+		return nil, writeMessageErr
+	} // if writeMessageErr
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New("Sent .Auth.ToSign successfuly to client"))
+	} // if production == ""
 	// Read the response from the client which should contain his IdenetityPublicKey and the signed byte sequence
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New("About to read Auth response from client"))
+	} // if production == ""
 	_, messageFromClientProto, readMessageErr := websocketConnection.ReadMessage()
 	// In case of an error, terminate the connection
 	if readMessageErr != nil {
 		return nil, readMessageErr
 	}
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New("Successfully read Auth response from client"))
+	} // if production == ""
 	// Unmarshal the response from the client into our protobuf Auth structure, and in case of an error, terminate the connection
 	if protoUnmarshalErr := golangProto.Unmarshal(messageFromClientProto, &messageFromClient); protoUnmarshalErr != nil {
 		return nil, protoUnmarshalErr
@@ -559,29 +573,47 @@ func requestAuth(websocketConnection *gorillaWebSocket.Conn) ([]byte, error) {
 	if len(byteSequenceThatClientSigned) != 8 {
 		return nil, errors.New("Signed byte sequence should be exactly 8 bytes")
 	} // if len(byteSequenceThatClientSigned) != 8
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New("OK Auth response from client has exactly 8 bytes"))
+	} // if production == ""
 	// Check if the byte sequence that was signed by the client contains the initial bytes we sent to the client
 	if !bytes.HasPrefix(byteSequenceThatClientSigned, backendRandomBytes) {
 		// If the client has modified the bytes we sent, return an error pointing out that this behavior is not allowed
 		return nil, errors.New("Client is only allowed to append a byte sequence, and not to modify the one which was sent")
 	} // if !bytes.HasPrefix
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New("OK Auth response from client appended 4 bytes"))
+	} // if production == ""
 	// Make sure that the identityPublicKey is exactly 32 bytes
 	if len(identityPublicKeyBytes) != 32 {
 		return nil, errors.New("identityPublicKey should be exactly 32 bytes")
 	} // if len(identityPublicKey) != 32
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New("OK Auth response from client identityPublicKey is exactly 32 bytes"))
+	} // if production == ""
 	// Fill the newly created identityPublicKey with the hex decoded representation of the IdentityPublicKey contained in the response from the client
 	copy(identityPublicKey[:], identityPublicKeyBytes)
 	// Make sure that the Signature is exactly 64 bytes
 	if len(messageFromClient.Response.Auth.Signature) != 64 {
 		return nil, errors.New("Signature should be exactly 64 bytes")
 	} // if len(messageFromClient.Response.Auth.Signature) != 32
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New("OK Auth response from client Signature is exactly 64 bytes"))
+	} // if production == ""
 	// Fill the newly created byteSequenceToSignSignature with the Signature contained in the response from the client
 	copy(byteSequenceToSignSignature[:], messageFromClient.Response.Auth.Signature)
 	// Verify the validity of the signature using cryptoEd25519.Verify()
 	if cryptoEd25519.Verify(identityPublicKey[:], byteSequenceThatClientSigned, byteSequenceToSignSignature[:]) {
+		if production == "" {
+			logError(syslog.LOG_INFO, errors.New("OK Auth signature was verified, echoing authentication attempt back to the client so that he knows it was successful"))
+		} // if production == ""
 		// If the signed byte sequence from client has a valid signature, echo the authentication attempt back to the client so that he knows it was successful
 		if writeMessageError := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageFromClientProto); writeMessageError != nil {
 			return nil, writeMessageError
 		} // if writeMessageError
+		if production == "" {
+			logError(syslog.LOG_INFO, errors.New("OK Auth echoing authentication attempt succeeded"))
+		} // if production == ""
 		// Return the identityPublicKey of the authenticated client
 		return identityPublicKeyBytes, nil
 	} // if cryptoEd25519.Verify
