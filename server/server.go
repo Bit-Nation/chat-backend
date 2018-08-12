@@ -307,6 +307,9 @@ func (a *authenticatedClientFirestore) processEvent(eventsProcessed int) (string
 		// Inner switch in case we have a Request from client, cases are valid if they are true
 		switch {
 		case messageFromClientProtobuf.Request.SignedPreKey != nil :
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" messageFromClientProtobuf.Request.SignedPreKey event : "+strconv.Itoa(eventsProcessed)))
+			} // if production == "")
 			// Temporary solution for processing a signedPreKey from client
 			var preKey backendProtobuf.PreKey
 			if protoUnmarshalErr := golangProto.Unmarshal(messageFromClientProtobuf.Request.SignedPreKey, &preKey); protoUnmarshalErr != nil {
@@ -321,6 +324,9 @@ func (a *authenticatedClientFirestore) processEvent(eventsProcessed int) (string
 			} // if persistSignedPreKeyFromClientErr == nil
 			return messageFromClientProtobuf.RequestID, persistSignedPreKeyFromClientErr
 		case messageFromClientProtobuf.Request.Messages != nil:
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" messageFromClientProtobuf.Request.Messages event : "+strconv.Itoa(eventsProcessed)))
+			} // if production == "")
 			for _, singleMessage := range messageFromClientProtobuf.Request.Messages {
 				// Store the intendedMessageReciepint in a variable to avoid calling hex.EncodeToString multiple times
 				intendedMessageReciepient := hex.EncodeToString(singleMessage.Receiver)
@@ -363,10 +369,19 @@ func (a *authenticatedClientFirestore) processEvent(eventsProcessed int) (string
 			return messageFromClientProtobuf.RequestID, persistChatMessagesFromClientErr
 		// @TODO wait for @Gross input on message states
 		case messageFromClientProtobuf.Request.MessageStateChange != nil:
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" messageFromClientProtobuf.Request.MessageStateChange event : "+strconv.Itoa(eventsProcessed)))
+			} // if production == "")
 			fmt.Println(messageFromClientProtobuf.Request.MessageStateChange, "MessageStateChange")
 		case messageFromClientProtobuf.Request.NewOneTimePreKeys != 0:
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" messageFromClientProtobuf.Request.NewOneTimePreKeys event : "+strconv.Itoa(eventsProcessed)))
+			} // if production == "")
 			return messageFromClientProtobuf.RequestID, errors.New("Only backend is allowed to request NewOneTimePreKeys")
 		case messageFromClientProtobuf.Request.PreKeyBundle != nil:
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" messageFromClientProtobuf.Request.PreKeyBundle event : "+strconv.Itoa(eventsProcessed)))
+			} // if production == "")
 			// Create a new instance of authenticatedClientFirestore to assist us with fetching the requested preKeyBundle
 			authenticatedClientForPreKeyBundle := authenticatedClientFirestore{}
 			// Use the already existing websocket connection which is expecting a respond to their request for the preKeyBundle
@@ -384,6 +399,9 @@ func (a *authenticatedClientFirestore) processEvent(eventsProcessed int) (string
 			} // if deliverRequestedPreKeyBundleErr
 			return messageFromClientProtobuf.RequestID, deliverRequestedPreKeyBundleErr
 		case messageFromClientProtobuf.Request.Auth != nil:
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" messageFromClientProtobuf.Request.Auth event : "+strconv.Itoa(eventsProcessed)))
+			} // if production == "")
 			return messageFromClientProtobuf.RequestID, errors.New("Backend should request authentication, not the client")
 		} // Inner switch {
 	// If the message is a response
@@ -391,8 +409,14 @@ func (a *authenticatedClientFirestore) processEvent(eventsProcessed int) (string
 		// Inner switch in case we have a Response from client, cases are valid if they are true
 		switch {
 		case messageFromClientProtobuf.Response.Auth != nil:
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" messageFromClientProtobuf.Response.Auth event : "+strconv.Itoa(eventsProcessed)))
+			} // if production == "")
 			return messageFromClientProtobuf.RequestID, errors.New("Authentication should not be handled here")
 		case messageFromClientProtobuf.Response.OneTimePrekeys != nil:
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" messageFromClientProtobuf.Response.OneTimePrekeys event : "+strconv.Itoa(eventsProcessed)))
+			} // if production == "")
 			persistOneTimePreKeysFromClientErr := a.persistOneTimePreKeysFromClient(messageFromClientProtobuf.Response.OneTimePrekeys)
 			// If no error was encountered while persisting the oneTimePreKeys from the client
 			if persistOneTimePreKeysFromClientErr == nil {
@@ -405,8 +429,14 @@ func (a *authenticatedClientFirestore) processEvent(eventsProcessed int) (string
 			} // if persistOneTimePreKeysFromClient == nil
 			return messageFromClientProtobuf.RequestID, persistOneTimePreKeysFromClientErr
 		case messageFromClientProtobuf.Response.PreKeyBundle != nil:
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" messageFromClientProtobuf.Response.PreKeyBundle event : "+strconv.Itoa(eventsProcessed)))
+			} // if production == "")
 			return messageFromClientProtobuf.RequestID, errors.New("Only backend is allowed to provide a PreKeyBundle")
 		case messageFromClientProtobuf.Response.SignedPreKey != nil:
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" messageFromClientProtobuf.Response.SignedPreKey event : "+strconv.Itoa(eventsProcessed)))
+			} // if production == "")
 			persistSignedPreKeyFromClientErr := a.persistSignedPreKeyFromClient(messageFromClientProtobuf.Response.SignedPreKey)
 			if persistSignedPreKeyFromClientErr == nil {
 				// If we are not in a production environment, verbose log the signedPreKey persistance
@@ -419,15 +449,26 @@ func (a *authenticatedClientFirestore) processEvent(eventsProcessed int) (string
 
 	// The only time it should reach the default case is when both messageFromClientProtobuf.Request == nil && messageFromClientProtobuf.Response == nil
 	default:
+		if production == "" {
+			logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" default event : "+strconv.Itoa(eventsProcessed)))
+		} // if production == "")
 		if messageFromClientProtobuf.Error != "" {
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+` default messageFromClientProtobuf.Error != "" : `+strconv.Itoa(eventsProcessed)))
+			} // if production == "")
 			return messageFromClientProtobuf.RequestID, errors.New(messageFromClientProtobuf.Error)
 		}
 
 		if messageFromClientProtobuf.RequestID != "" {
-			// @TODO RESPOND TO THIS REQUEST
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+` default messageFromClientProtobuf.RequestID != "" : `+strconv.Itoa(eventsProcessed)))
+			} // if production == "")
 		}
 
 		if messageFromClientProtobuf.RequestID == "" {
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+` default messageFromClientProtobuf.RequestID == "" : `+strconv.Itoa(eventsProcessed)))
+			} // if production == "")
 			a.websocketConnection.Close()
 			delete(authenticatedClientWebSocketConnectionMap, a.authenticatedIdentityPublicKeyHex)
 		}
