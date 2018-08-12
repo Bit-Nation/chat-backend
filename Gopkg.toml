@@ -36,8 +36,8 @@
   branch = "system_update"
 
 [[constraint]]
-  branch = "master"
   name = "github.com/Bit-Nation/protobuffers"
+  version = "1.0.0"
 
 [[constraint]]
   branch = "master"

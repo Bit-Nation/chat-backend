@@ -536,6 +536,9 @@ func requestAuth(websocketConnection *gorillaWebSocket.Conn) ([]byte, error) {
 		logError(syslog.LOG_INFO, errors.New("Sending .Auth.ToSign over websocket to client"))
 	} // if production == ""
 	// Send the protobuf data to the client containing the sequence of bytes he needs to sign
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New("Exact message sent : " + base64.StdEncoding.EncodeToString(messageToClientBytes)))
+	} // if production == ""
 	if writeMessageErr := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientBytes); writeMessageErr != nil {
 		return nil, writeMessageErr
 	} // if writeMessageErr

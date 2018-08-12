@@ -69,12 +69,12 @@
   revision = "2337c6749cafb402fce8709e20dc2712d196375a"
 
 [[projects]]
-  branch = "master"
-  digest = "1:405ebac7c7c7c69ce915be2cc8cbcc34dded88e6c73cbb29c8dc3b584ac5882c"
+  digest = "1:fe832b36c0332580015168714cf6742b39bcdfce00d86160e3044765fdd8c4d9"
   name = "github.com/Bit-Nation/protobuffers"
   packages = ["."]
   pruneopts = "UT"
-  revision = "89156fe5570c8c3b700e25db4dd50267bcf5eeb0"
+  revision = "6d938beba2e5ebf2d10405387bcf7adfb7512a6a"
+  version = "1.0.0"
 
 [[projects]]
   branch = "master"
