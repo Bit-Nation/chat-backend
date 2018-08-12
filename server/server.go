@@ -122,6 +122,9 @@ func HandleProfile(serverHTTPResponse http.ResponseWriter, clientHTTPRequest *ht
 
 // HandleWebSocketConnection decides what happens when a client establishes a websocket connection to the server
 func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTTPRequest *http.Request) {
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New("Pre-bearer, client connected"))
+	} // if production == ""
 	// Get bearer token from environment variable
 	bearerToken := os.Getenv("BEARER")
 	// Allow only requests which contain the specific Bearer header
@@ -131,6 +134,9 @@ func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 		http.Error(serverHTTPResponse, "Forbidden", 403)
 		return
 	}
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New("Bearer auth successful"))
+	} // if production == ""
 	// Prepare to upgrade the HTTP connection to a WebSocket connection
 	httpConnectionUpgrader := gorillaWebSocket.Upgrader{}
 	// Upgrade the HTTP connection to a WebSocket connection
@@ -142,11 +148,17 @@ func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 		websocketConnection.Close()
 		return
 	}
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New("Websocket connection upgraded"))
+	} // if production == ""
 	// Initialise the authenticatedClientFirestore object
 	authenticatedClient := authenticatedClientFirestore{}
 	// Set the websocketConnection so that we can send an error back to the client in case auth fails
 	authenticatedClient.websocketConnection = websocketConnection
 	// Require successful authentication before allowing a client to send a message
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New("Requesting auth from client"))
+	} // if production == ""
 	authenticatedIdentityPublicKeyClient, websocketConnectionRequestAuthErr := requestAuth(websocketConnection)
 	// If the authentication failed,
 	if websocketConnectionRequestAuthErr != nil {
@@ -157,20 +169,23 @@ func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 		if writeMessageErr := authenticatedClient.sendErrorToClient(); writeMessageErr != nil {
 			logError(syslog.LOG_ERR, writeMessageErr)
 		} // if writeMessageErr
-		logError(syslog.LOG_INFO, errors.New("terminating websocket connection to client"))
+		logError(syslog.LOG_INFO, errors.New("Auth failed, terminating websocket connection to client"))
 		// Close the websocket connection
 		websocketConnection.Close()
 		return
 	} // if websocketConnectionRequestAuthErr != nil
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New(authenticatedClient.authenticatedIdentityPublicKeyHex+"Auth Successful"))
+	} // if production == ""
 	// Only set the authenticatedIdentityPublicKeyHex once authentication has been successful
 	authenticatedClient.authenticatedIdentityPublicKeyHex = hex.EncodeToString(authenticatedIdentityPublicKeyClient)
 	// Store the connection of an authenticated client so that other clients can interact with him in real time
 	authenticatedClientWebSocketConnectionMap[authenticatedClient.authenticatedIdentityPublicKeyHex] = websocketConnection
 	// If it's a dev enviroment, log verbose info
-	if production == "" {
-		logError(syslog.LOG_INFO, errors.New(authenticatedClient.authenticatedIdentityPublicKeyHex+" Auth Successful"))
-	} // if production == ""
 	// Continue in the scope of the authenticatedWebsocketConnection to allow for easier testing
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New(authenticatedClient.authenticatedIdentityPublicKeyHex+" Entering interactive mode"))
+	} // if production == ""
 	authenticatedWebsocketConnection(&authenticatedClient)
 	// Wait some in case things are still using resources
 } // func handleWebSocketConnection
