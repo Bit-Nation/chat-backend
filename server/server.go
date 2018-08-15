@@ -698,6 +698,9 @@ func requestAuth(websocketConnection *gorillaWebSocket.Conn) ([]byte, string, er
 } // func requestAuth
 
 func sendConfirmationToClient(requestID string, websocketConnection *gorillaWebSocket.Conn) error {
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New("Trying to send confirmation to client that there wasn't an error while processing " + requestID))
+	} // if production == ""
 	// Create a structure to send to client
 	var messageToClientProtobuf backendProtobuf.BackendMessage
 	// Set the request id which completeed successfully
@@ -706,11 +709,20 @@ func sendConfirmationToClient(requestID string, websocketConnection *gorillaWebS
 	messageToClientProtobufBytes, messageToClientProtobufBytesErr := golangProto.Marshal(&messageToClientProtobuf);
 	if messageToClientProtobufBytesErr != nil {
 		return messageToClientProtobufBytesErr
+		if production == "" {
+			logError(syslog.LOG_INFO, errors.New("Protobuf marshal error encountered while sending confirmation to client in regards to " + requestID))
+		} // if production == ""
 	} // if messageToClientProtobufBytes
 	// Send the .RequestID back to the client so that he knows it was successful
 	if writeMessageError := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientProtobufBytes); writeMessageError != nil {
+		if production == "" {
+			logError(syslog.LOG_INFO, errors.New("WriteMessageError encountered while sending confirmation to client in regards to  " + requestID))
+		} // if production == ""
 		return writeMessageError
 	} // if writeMessageError
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New("Successfully sent confirmation to client that there wasn't an error while processing " + requestID))
+	} // if production == ""
 	return nil
 } // func sendConfirmationToClient
 func logError(priority syslog.Priority, err error) {
