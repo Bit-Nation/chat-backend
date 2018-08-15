@@ -60,7 +60,7 @@ func TestHandleWebSocketConnection(t *testing.T) {
 		"Earth",
 		"base64",
 		"amazing surprise admit live basic outside people echo fault come interest flat awesome dragon share reason suggest scatter project omit daring business push afford",
-		"ws://127.0.0.1:"+listenPort+"/chat",
+		"ws://127.0.0.1:" + listenPort + "/chat",
 		"super_secure_over_9000",
 		oneTimePreKeysReceiver,
 		signedPreKeyReceiver,
@@ -71,7 +71,7 @@ func TestHandleWebSocketConnection(t *testing.T) {
 		"Earth",
 		"base64",
 		"amazing surprise admit live basic outside people echo fault come interest flat awesome dragon share reason suggest scatter project omit daring business push afford",
-		"ws://127.0.0.1:"+listenPort+"/chat",
+		"ws://127.0.0.1:" + listenPort + "/chat",
 		"super_secure_over_9000",
 		oneTimePreKeysReceiver,
 		signedPreKeyReceiver,
@@ -83,12 +83,13 @@ func TestHandleWebSocketConnection(t *testing.T) {
 		"Earth",
 		"base64",
 		"crunch ahead select guess pledge bundle midnight gossip episode govern brick humor forest age inhale scatter fringe love brief cute since room orange couple",
-		"ws://127.0.0.1:"+listenPort+"/chat",
+		"ws://127.0.0.1:" + listenPort + "/chat",
 		"super_secure_over_9000",
 		[]bitnationX3dh.KeyPair{},
 		bitnationX3dh.KeyPair{},
 	)
 	// Upload a profile on the backend
+	time.Sleep(7 * time.Second)
 	putProfileOnBackend(t)
 	// Retreive a profile from the backend
 	getProfileFromBackend(t)
@@ -164,7 +165,7 @@ func putProfileOnBackend(t *testing.T) {
 	// Use an already base64 encoded Profile protobuf bytes to make testing simpler
 	profileBase64 := strings.NewReader(`CgNCb2ISBUVhcnRoGgZiYXNlNjQiICLP0a9XmFRCh8v3choKTrwlBtb03wVBM1Wn9cyGdAckKiECcFb7RfrdatrDp9TlXw1/nNU/cF1hoxaMCoEPY1a7c8QyIH7ffl1cs/4+0WzRS7j7c+Y2/moLUj0iLxgLKbqakcphOLTasdoFQAJKQDztvodZmPkxuEBra1RGXsMsyirTIajSuaN4rOoNMkOPB/8+RXFZKVOhkjkNTsSW+WU7dYExiaxC8Wi7KVOB5wNSQaxE7LN3oNBk1GUkmyYFaN5fWrYmTDe9iz39gWH6/gCLVuFwA1g4RpMnNoiD0rdIC+9AL6gUC8XMQKZuuKOY/QcB`)
 	// Create a new PUT request to put the profile in the storage
-	httpRequest, httpRequestErr := http.NewRequest("PUT", "http://127.0.0.1:"+listenPort+"/profile", profileBase64)
+	httpRequest, httpRequestErr := http.NewRequest("PUT", "http://127.0.0.1:" + listenPort + "/profile", profileBase64)
 	testifyRequire.Nil(t, httpRequestErr)
 	// Set bearer auth
 	httpRequest.Header.Set("Bearer", "super_secure_over_9000")
@@ -195,7 +196,7 @@ func getProfileFromBackend(t *testing.T) {
 	profileProtobufBytes, profileProtobufErr := base64.StdEncoding.DecodeString(profileBase64)
 	testifyRequire.Nil(t, profileProtobufErr)
 	// Create a new get request to get a profile from the backend
-	httpRequest, httpRequestErr := http.NewRequest("GET", "http://127.0.0.1:"+listenPort+"/profile", nil)
+	httpRequest, httpRequestErr := http.NewRequest("GET", "http://127.0.0.1:" + listenPort + "/profile", nil)
 	testifyRequire.Nil(t, httpRequestErr)
 
 	// Set bearer auth
@@ -341,7 +342,7 @@ func (c *Client) testUploadSignedPreKey(t *testing.T) {
 	// Add the request id
 	messageToBackendProtobuf.RequestID = uuid.NewV4().String()
 	// Initialize an empty Response structure
-	messageToBackendProtobuf.Response = &backendProtobuf.BackendMessage_Response{}
+	messageToBackendProtobuf.Request = &backendProtobuf.BackendMessage_Request{}
 	// Initialize an empty PreKey structure
 	preKeyProtobuf := backendProtobuf.PreKey{}
 	// Set the Key field in the PreKey structure to the PublicKey from the signedPreKey bitnationX3dh.KeyPair
@@ -357,7 +358,7 @@ func (c *Client) testUploadSignedPreKey(t *testing.T) {
 	// Set the IdentityKeySignature in the PreKey structure to the resulting signature of the IdentitySign process
 	preKeyProtobuf.IdentityKeySignature = identityKeySignature
 	// Append the PreKey structure to the message response we are about to send to the backend
-	messageToBackendProtobuf.Response.SignedPreKey = &preKeyProtobuf
+	messageToBackendProtobuf.Request.NewSignedPreKey = &preKeyProtobuf
 	// Use protobuf to marshal the message response we are about to send
 	messageToBackendProtobufBytes, messageToBackendProtobufBytesErr := golangProto.Marshal(&messageToBackendProtobuf)
 	testifyRequire.Nil(t, messageToBackendProtobufBytesErr)

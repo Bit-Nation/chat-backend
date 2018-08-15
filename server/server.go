@@ -298,26 +298,24 @@ func (a *authenticatedClientFirestore) processEvent(eventsProcessed int) (string
 		} // if messageFromClientProtobuf.RequestID
 		// Inner switch in case we have a Request from client, cases are valid if they are true
 		switch {
-		case messageFromClientProtobuf.Request.SignedPreKey != nil :
+		case messageFromClientProtobuf.Request.NewSignedPreKey != nil :
 			if production == "" {
-				logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" messageFromClientProtobuf.Request.SignedPreKey event : "+strconv.Itoa(eventsProcessed)))
+				logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" messageFromClientProtobuf.Request.NewSignedPreKey event : "+strconv.Itoa(eventsProcessed)))
 			} // if production == "")
-			// Temporary solution for processing a signedPreKey from client
-			var preKey backendProtobuf.PreKey
-			if protoUnmarshalErr := golangProto.Unmarshal(messageFromClientProtobuf.Request.SignedPreKey, &preKey); protoUnmarshalErr != nil {
-				return messageFromClientProtobuf.RequestID, protoUnmarshalErr
-			} // if protoUnmarshalErr
-			persistSignedPreKeyFromClientErr := a.persistSignedPreKeyFromClient(&preKey)
+			persistSignedPreKeyFromClientErr := a.persistSignedPreKeyFromClient(messageFromClientProtobuf.Request.NewSignedPreKey)
 			if persistSignedPreKeyFromClientErr == nil {
 				if confirmationErr := sendConfirmationToClient(messageFromClientProtobuf.RequestID, a.websocketConnection); confirmationErr != nil {
 					return messageFromClientProtobuf.RequestID, confirmationErr
 				} // if confirmationErr
 				// If we are not in a production environment, verbose log the signedPreKey persistance
 				if production == "" {
-					logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Persisted signedPreKey with id : "+fmt.Sprint(messageFromClientProtobuf.Response.SignedPreKey.TimeStamp)+" which belongs to : "+hex.EncodeToString(messageFromClientProtobuf.Response.SignedPreKey.IdentityKey)))
+					logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Persisted signedPreKey with id : "+fmt.Sprint(messageFromClientProtobuf.Request.NewSignedPreKey.TimeStamp)+" which belongs to : "+hex.EncodeToString(messageFromClientProtobuf.Request.NewSignedPreKey.IdentityKey)))
 				} // if production == ""
 			} // if persistSignedPreKeyFromClientErr == nil
-			return messageFromClientProtobuf.RequestID, persistSignedPreKeyFromClientErr
+			return messageFromClientProtobuf.RequestID, persistSignedPreKeyFromClientErr	
+		case messageFromClientProtobuf.Request.SignedPreKey != nil :
+			a.encounteredError = errors.New("Use .Request.NewSignedPreKey (type PreKey) instead of Request.SignedPreKey (type []byte)")
+			a.sendErrorToClient(messageFromClientProtobuf.RequestID)
 		case messageFromClientProtobuf.Request.Messages != nil:
 			if production == "" {
 				logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" messageFromClientProtobuf.Request.Messages event : "+strconv.Itoa(eventsProcessed)))
