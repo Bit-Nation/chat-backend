@@ -170,6 +170,14 @@ func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 		if writeMessageErr := authenticatedClient.sendErrorToClient(requestID); writeMessageErr != nil {
 			logError(syslog.LOG_ERR, writeMessageErr)
 		} // if writeMessageErr
+		// Set an error describing that Auth has failed
+		authenticatedClient.encounteredError = errors.New("Auth failed, terminating websocket connection to client")
+		// Send the error back to the client
+		if sendErrorToClientErr := authenticatedClient.sendErrorToClient(requestID); sendErrorToClientErr != nil {
+			logError(syslog.LOG_INFO, errors.New("Failed to send the error to the client that Auth has failed"))
+			logError(syslog.LOG_INFO, sendErrorToClientErr)
+		} // if sendErrorToClientErr
+		// Log the error
 		logError(syslog.LOG_INFO, errors.New("Auth failed, terminating websocket connection to client"))
 		// Close the websocket connection
 		websocketConnection.Close()
