@@ -165,17 +165,12 @@ func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 	if websocketConnectionRequestAuthErr != nil {
 		// Log a failed authentication attempt
 		logError(syslog.LOG_ERR, websocketConnectionRequestAuthErr)
-		// In case there was a protobuf marshal error, The client would receive an empty []byte and should handle it as an invalid response
-		// Even with an invalid response, the client should still take the hint that his authentication attempt has failed
-		if writeMessageErr := authenticatedClient.sendErrorToClient(requestID); writeMessageErr != nil {
-			logError(syslog.LOG_ERR, writeMessageErr)
-		} // if writeMessageErr
 		// Set an error describing that Auth has failed
-		authenticatedClient.encounteredError = errors.New("Auth failed, terminating websocket connection to client")
+		authenticatedClient.encounteredError = errors.New("Auth failed, terminating websocket connection")
 		// Send the error back to the client
 		if sendErrorToClientErr := authenticatedClient.sendErrorToClient(requestID); sendErrorToClientErr != nil {
-			logError(syslog.LOG_INFO, errors.New("Failed to send the error to the client that Auth has failed"))
-			logError(syslog.LOG_INFO, sendErrorToClientErr)
+			logError(syslog.LOG_ERR, errors.New("Failed to send the error to the client that Auth has failed"))
+			logError(syslog.LOG_ERR, sendErrorToClientErr)
 		} // if sendErrorToClientErr
 		// Log the error
 		logError(syslog.LOG_INFO, errors.New("Auth failed, terminating websocket connection to client"))
