@@ -130,11 +130,25 @@ func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 	bearerToken := os.Getenv("BEARER")
 	// Allow only requests which contain the specific Bearer header
 	// Allow only GET requests
-	if clientHTTPRequest.Header.Get("Bearer") != bearerToken || clientHTTPRequest.Method != "GET" {
-		// If a client is missing the Bearer header or is using a different method than GET return a Forbidden error
-		http.Error(serverHTTPResponse, "Forbidden", 403)
+	identityPublicKeyHex := clientHTTPRequest.Header.Get("Identity")
+	identityPublicKeyBytes, identityPublicKeyBytesErr := hex.DecodeString(identityPublicKeyHex)
+	if identityPublicKeyBytesErr != nil {
+		logError(syslog.LOG_ERR, identityPublicKeyBytesErr)
+		http.Error(serverHTTPResponse, identityPublicKeyBytesErr.Error(), 500)
 		return
-	}
+	} // if identityPublicKeyBytesErr != nil
+	clientBearerTokenSignatureBytes, clientBearerTokenSignatureBytesErr := base64.StdEncoding.DecodeString(clientHTTPRequest.Header.Get("Bearer"))
+	if clientBearerTokenSignatureBytesErr != nil {
+		 logError(syslog.LOG_ERR, clientBearerTokenSignatureBytesErr)
+		 http.Error(serverHTTPResponse,  clientBearerTokenSignatureBytesErr.Error(), 500)
+		 return
+	} // if clientBearerTokenSignatureBytesErr != nil
+	// If signature validation doesn't pass, fail auth and inform the client
+	if !cryptoEd25519.Verify(identityPublicKeyBytes, []byte(bearerToken), clientBearerTokenSignatureBytes) {
+		logError(syslog.LOG_INFO, errors.New("Auth failed : " + hex.EncodeToString(identityPublicKeyBytes) + " " + bearerToken + " " + clientHTTPRequest.Header.Get("Bearer")))
+		http.Error(serverHTTPResponse, "Auth failed", 403)
+		return
+	} // if !cryptoEd25519.Verify
 	if production == "" {
 		logError(syslog.LOG_INFO, errors.New("Bearer auth successful"))
 	} // if production == ""
@@ -156,33 +170,8 @@ func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 	authenticatedClient := authenticatedClientFirestore{}
 	// Set the websocketConnection so that we can send an error back to the client in case auth fails
 	authenticatedClient.websocketConnection = websocketConnection
-	// Require successful authentication before allowing a client to send a message
-	if production == "" {
-		logError(syslog.LOG_INFO, errors.New("Requesting auth from client"))
-	} // if production == ""
-	authenticatedIdentityPublicKeyClient, requestID,  websocketConnectionRequestAuthErr := requestAuth(websocketConnection)
-	// If the authentication failed,
-	if websocketConnectionRequestAuthErr != nil {
-		// Log a failed authentication attempt
-		logError(syslog.LOG_ERR, websocketConnectionRequestAuthErr)
-		// Set an error describing that Auth has failed
-		authenticatedClient.encounteredError = errors.New("Auth failed, terminating websocket connection")
-		// Send the error back to the client
-		if sendErrorToClientErr := authenticatedClient.sendErrorToClient(requestID); sendErrorToClientErr != nil {
-			logError(syslog.LOG_ERR, errors.New("Failed to send the error to the client that Auth has failed"))
-			logError(syslog.LOG_ERR, sendErrorToClientErr)
-		} // if sendErrorToClientErr
-		// Log the error
-		logError(syslog.LOG_INFO, errors.New("Auth failed, terminating websocket connection to client"))
-		// Close the websocket connection
-		websocketConnection.Close()
-		return
-	} // if websocketConnectionRequestAuthErr != nil
-	if production == "" {
-		logError(syslog.LOG_INFO, errors.New(authenticatedClient.authenticatedIdentityPublicKeyHex+"Auth Successful"))
-	} // if production == ""
-	// Only set the authenticatedIdentityPublicKeyHex once authentication has been successful
-	authenticatedClient.authenticatedIdentityPublicKeyHex = hex.EncodeToString(authenticatedIdentityPublicKeyClient)
+	// Assign it here to a new variable in case we need to revert to previous version of code 
+	authenticatedClient.authenticatedIdentityPublicKeyHex = identityPublicKeyHex
 	// Store the connection of an authenticated client so that other clients can interact with him in real time
 	authenticatedClientWebSocketConnectionMap[authenticatedClient.authenticatedIdentityPublicKeyHex] = websocketConnection
 	// If it's a dev enviroment, log verbose info

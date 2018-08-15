@@ -93,7 +93,7 @@ func TestHandleWebSocketConnection(t *testing.T) {
 	// Retreive a profile from the backend
 	getProfileFromBackend(t)
 	// Reciever needs to pass authentication
-	clientReceiver.testAuth(t)
+	//clientReceiver.testAuth(t)
 	// Receiver uploads the one time pre keys
 	clientReceiver.testUploadOneTimePreKeys(t)
 	// Receiver uploads the signed pre key
@@ -127,7 +127,7 @@ func TestHandleWebSocketConnection(t *testing.T) {
 	}()
 
 	// Initial message sender needs to pass authentication
-	clientSender.testAuth(t)
+	//clientSender.testAuth(t)
 	// Get a hex decoded byte representation of the identity public key for the initial message receiver that we want to chat with
 	identityPublicKeyBytes, identityPublicKeyBytesErr := hex.DecodeString("22cfd1af5798544287cbf7721a0a4ebc2506d6f4df05413355a7f5cc86740724")
 	testifyRequire.Nil(t, identityPublicKeyBytesErr)
@@ -140,7 +140,7 @@ func TestHandleWebSocketConnection(t *testing.T) {
 	// Initial message sender sends a message to the backend to get persisted
 	clientSender.testSendMessage(t, remotePreKeyBundlePublic)
 	// Receiver needs to pass auth again
-	clientReceiverRestartedApp.testAuth(t)
+	//clientReceiverRestartedApp.testAuth(t)
 	// Receiver receives any undelivered messages while he was offline
 	unreadChatMessages := clientReceiverRestartedApp.receiveUndeliveredMessages(t)
 	// Test if we can decrypt the message successfully
@@ -237,11 +237,12 @@ func newStaticOneTimePreKeysReceiver() []bitnationX3dh.KeyPair {
 	return []bitnationX3dh.KeyPair{oneTimePreKeyReceiver}
 }
 
-func newWebSocketConnection(t *testing.T, websocketURL, bearer string) *gorillaWebSocket.Conn {
+func newWebSocketConnection(t *testing.T, websocketURL, bearer, identity string) *gorillaWebSocket.Conn {
 	// Setup custom headers to allow the Bearer token
 	customHeaders := http.Header{}
 	// Add the Bearer token to the custom headers
 	customHeaders.Add("Bearer", bearer)
+	customHeaders.Add("Identity", identity)
 	// Initialize a websocket dialer
 	websocketDialer := gorillaWebSocket.Dialer{}
 	// Initialize a websocket connection of a message sender
@@ -257,8 +258,6 @@ func newWebSocketConnection(t *testing.T, websocketURL, bearer string) *gorillaW
 	return websocketConnection
 }
 func newClient(t *testing.T, name, location, image, mnemonicString, websocketURL, bearer string, oneTimePreKeys []bitnationX3dh.KeyPair, signedPreKey bitnationX3dh.KeyPair) Client {
-	// Establish a new websocket connection
-	websocketConnection := newWebSocketConnection(t, websocketURL, bearer)
 	// Use the mnemonic string supplied
 	mnemonic, mnemonicErr := panthalassaMnemonic.FromString(mnemonicString)
 	testifyRequire.Nil(t, mnemonicErr)
@@ -267,6 +266,12 @@ func newClient(t *testing.T, name, location, image, mnemonicString, websocketURL
 	testifyRequire.Nil(t, keystoreErr)
 	// Create a new keymanager using the keyStore
 	keyManager := panthalassaKeyManager.CreateFromKeyStore(keyStore)
+	// Establish a new websocket connection
+	identityPublicKeySenderHex, identityPublicKeySenderHexErr := keyManager.IdentityPublicKey()
+	testifyRequire.Nil(t, identityPublicKeySenderHexErr)
+	bearerTokenSignature, bearerTokenSignatureErr := keyManager.IdentitySign([]byte(bearer))
+	testifyRequire.Nil(t, bearerTokenSignatureErr)
+	websocketConnection := newWebSocketConnection(t, websocketURL, base64.StdEncoding.EncodeToString(bearerTokenSignature), identityPublicKeySenderHex)
 	// Create a signed version of the profile
 	profileSigned, profileErr := panthalassaProfile.SignProfile(name, location, image, *keyManager)
 	testifyRequire.Nil(t, profileErr)
