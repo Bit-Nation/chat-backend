@@ -14,6 +14,7 @@ import (
 	"os"
 	"strconv"
 
+	uuid "github.com/satori/go.uuid"
 	profile "github.com/Bit-Nation/panthalassa/profile"
 	backendProtobuf "github.com/Bit-Nation/protobuffers"
 	golangProto "github.com/golang/protobuf/proto"
@@ -122,15 +123,35 @@ func HandleProfile(serverHTTPResponse http.ResponseWriter, clientHTTPRequest *ht
 
 // HandleWebSocketConnection decides what happens when a client establishes a websocket connection to the server
 func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTTPRequest *http.Request) {
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New("Pre-bearer, client connected"))
+	} // if production == ""
 	// Get bearer token from environment variable
 	bearerToken := os.Getenv("BEARER")
 	// Allow only requests which contain the specific Bearer header
 	// Allow only GET requests
-	if clientHTTPRequest.Header.Get("Bearer") != bearerToken || clientHTTPRequest.Method != "GET" {
-		// If a client is missing the Bearer header or is using a different method than GET return a Forbidden error
-		http.Error(serverHTTPResponse, "Forbidden", 403)
+	identityPublicKeyHex := clientHTTPRequest.Header.Get("Identity")
+	identityPublicKeyBytes, identityPublicKeyBytesErr := hex.DecodeString(identityPublicKeyHex)
+	if identityPublicKeyBytesErr != nil {
+		logError(syslog.LOG_ERR, identityPublicKeyBytesErr)
+		http.Error(serverHTTPResponse, identityPublicKeyBytesErr.Error(), 500)
 		return
-	}
+	} // if identityPublicKeyBytesErr != nil
+	clientBearerTokenSignatureBytes, clientBearerTokenSignatureBytesErr := base64.StdEncoding.DecodeString(clientHTTPRequest.Header.Get("Bearer"))
+	if clientBearerTokenSignatureBytesErr != nil {
+		 logError(syslog.LOG_ERR, clientBearerTokenSignatureBytesErr)
+		 http.Error(serverHTTPResponse,  clientBearerTokenSignatureBytesErr.Error(), 500)
+		 return
+	} // if clientBearerTokenSignatureBytesErr != nil
+	// If signature validation doesn't pass, fail auth and inform the client
+	if !cryptoEd25519.Verify(identityPublicKeyBytes, []byte(bearerToken), clientBearerTokenSignatureBytes) {
+		logError(syslog.LOG_INFO, errors.New("Auth failed : " + hex.EncodeToString(identityPublicKeyBytes) + " " + bearerToken + " " + clientHTTPRequest.Header.Get("Bearer")))
+		http.Error(serverHTTPResponse, "Auth failed", 403)
+		return
+	} // if !cryptoEd25519.Verify
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New("Bearer auth successful"))
+	} // if production == ""
 	// Prepare to upgrade the HTTP connection to a WebSocket connection
 	httpConnectionUpgrader := gorillaWebSocket.Upgrader{}
 	// Upgrade the HTTP connection to a WebSocket connection
@@ -142,35 +163,22 @@ func HandleWebSocketConnection(serverHTTPResponse http.ResponseWriter, clientHTT
 		websocketConnection.Close()
 		return
 	}
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New("Websocket connection upgraded"))
+	} // if production == ""
 	// Initialise the authenticatedClientFirestore object
 	authenticatedClient := authenticatedClientFirestore{}
 	// Set the websocketConnection so that we can send an error back to the client in case auth fails
 	authenticatedClient.websocketConnection = websocketConnection
-	// Require successful authentication before allowing a client to send a message
-	authenticatedIdentityPublicKeyClient, websocketConnectionRequestAuthErr := requestAuth(websocketConnection)
-	// If the authentication failed,
-	if websocketConnectionRequestAuthErr != nil {
-		// Log a failed authentication attempt
-		logError(syslog.LOG_ERR, websocketConnectionRequestAuthErr)
-		// In case there was a protobuf marshal error, The client would receive an empty []byte and should handle it as an invalid response
-		// Even with an invalid response, the client should still take the hint that his authentication attempt has failed
-		if writeMessageErr := authenticatedClient.sendErrorToClient(); writeMessageErr != nil {
-			logError(syslog.LOG_ERR, writeMessageErr)
-		} // if writeMessageErr
-		logError(syslog.LOG_INFO, errors.New("terminating websocket connection to client"))
-		// Close the websocket connection
-		websocketConnection.Close()
-		return
-	} // if websocketConnectionRequestAuthErr != nil
-	// Only set the authenticatedIdentityPublicKeyHex once authentication has been successful
-	authenticatedClient.authenticatedIdentityPublicKeyHex = hex.EncodeToString(authenticatedIdentityPublicKeyClient)
+	// Assign it here to a new variable in case we need to revert to previous version of code 
+	authenticatedClient.authenticatedIdentityPublicKeyHex = identityPublicKeyHex
 	// Store the connection of an authenticated client so that other clients can interact with him in real time
 	authenticatedClientWebSocketConnectionMap[authenticatedClient.authenticatedIdentityPublicKeyHex] = websocketConnection
 	// If it's a dev enviroment, log verbose info
-	if production == "" {
-		logError(syslog.LOG_INFO, errors.New(authenticatedClient.authenticatedIdentityPublicKeyHex+" Auth Successful"))
-	} // if production == ""
 	// Continue in the scope of the authenticatedWebsocketConnection to allow for easier testing
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New(authenticatedClient.authenticatedIdentityPublicKeyHex+" Entering interactive mode"))
+	} // if production == ""
 	authenticatedWebsocketConnection(&authenticatedClient)
 	// Wait some in case things are still using resources
 } // func handleWebSocketConnection
@@ -207,18 +215,18 @@ func authenticatedWebsocketConnection(storage storageInterface) {
 	} // if production == "")
 	// Try to process a message from the client
 	processedEvents := 0
-	websocketConnectionprocessEventErr := authenticatedClient.processEvent(processedEvents)
+	requestID, websocketConnectionprocessEventErr := authenticatedClient.processEvent(processedEvents)
 	// For as long as we don't enounter an error while processing messages from the client
 	for websocketConnectionprocessEventErr == nil {
 		// Process messages from the client
 		processedEvents++
-		websocketConnectionprocessEventErr = authenticatedClient.processEvent(processedEvents)
+		requestID, websocketConnectionprocessEventErr = authenticatedClient.processEvent(processedEvents)
 	} // for websocketConnectionprocessEventErr == nil
 	// Once we enounter an error while processing messages from the client
 	// Log the error we encountered
 	logError(syslog.LOG_ERR, websocketConnectionprocessEventErr)
 	// If there is an error while sending the error to the client, log the error
-	if writeMessageErr := authenticatedClient.sendErrorToClient(); writeMessageErr != nil {
+	if writeMessageErr := authenticatedClient.sendErrorToClient(requestID); writeMessageErr != nil {
 		logError(syslog.LOG_ERR, writeMessageErr)
 	} // if writeMessageErr
 	logError(syslog.LOG_INFO, errors.New("terminating websocket connection to client"))
@@ -229,9 +237,11 @@ func authenticatedWebsocketConnection(storage storageInterface) {
 	// Read first message from client
 } // func authenticatedWebsocketConnection
 
-func (a *authenticatedClientFirestore) sendErrorToClient() error {
+func (a *authenticatedClientFirestore) sendErrorToClient(requestID string) error {
 	// Create a protobuf message structure to send back to the client
 	var messageToClientProtobuf backendProtobuf.BackendMessage
+	// Set the request id from the message that caused the error
+	messageToClientProtobuf.RequestID = requestID
 	// Create a []byte variable to hold the marshaled protobuf bytes
 	var messageToClientProtobufBytes []byte
 	// Create an error variable to hold an error in case the protobuf marshaling failed
@@ -252,42 +262,64 @@ func (a *authenticatedClientFirestore) sendErrorToClient() error {
 	return nil
 } // func sendErrorToClient
 
-func (a *authenticatedClientFirestore) processEvent(eventsProcessed int) error {
+func (a *authenticatedClientFirestore) processEvent(eventsProcessed int) (string, error) {
 	// Initialize an empty variable to hold the protobuf message
 	var messageFromClientProtobuf backendProtobuf.BackendMessage
 	// Read a message from a client over the websocket connection
 	_, messageFromClientBytes, readMessageErr := a.websocketConnection.ReadMessage()
+	// Unmarshal the protobuf bytes from the message we received into our protobuf message structure
+	if protoUnmarshalErr := golangProto.Unmarshal(messageFromClientBytes, &messageFromClientProtobuf); protoUnmarshalErr != nil {
+		return  uuid.NewV4().String(), protoUnmarshalErr
+	}
 	// If there is an error while reading the message from client
 	if readMessageErr != nil {
 		// If it's not a normal connection closure, return an error
 		if !gorillaWebSocket.IsCloseError(readMessageErr, gorillaWebSocket.CloseNormalClosure) {
-			return readMessageErr
+			return  messageFromClientProtobuf.RequestID, readMessageErr
 		}
-		return nil
+		return messageFromClientProtobuf.RequestID, nil 
 	} // if readMessageErr != nil
 	// If it's a dev enviroment, log verbose info
 	if production == "" {
 		logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Processing client event number : "+strconv.Itoa(eventsProcessed)))
 	} // if production == "")
-	// Unmarshal the protobuf bytes from the message we received into our protobuf message structure
-	if protoUnmarshalErr := golangProto.Unmarshal(messageFromClientBytes, &messageFromClientProtobuf); protoUnmarshalErr != nil {
-		return protoUnmarshalErr
-	}
+
 	// Outer master switch, cases are valid if they are true
 	switch {
 	// In case a message has both a request and a response
 	case messageFromClientProtobuf.Request != nil && messageFromClientProtobuf.Response != nil:
 		// Return an error as it's not allowed for a message to have both a response and a request at the same time
-		return errors.New("A message can’t have a response and a request at the same time")
+		return messageFromClientProtobuf.RequestID, errors.New("A message can’t have a response and a request at the same time")
 	// If the message is a request
 	case messageFromClientProtobuf.Request != nil:
 		// In case a requestID is missing from a client request
 		if messageFromClientProtobuf.RequestID == "" {
-			return errors.New("A valid client request should always have a RequestID")
+			return messageFromClientProtobuf.RequestID, errors.New("A valid client request should always have a RequestID")
 		} // if messageFromClientProtobuf.RequestID
 		// Inner switch in case we have a Request from client, cases are valid if they are true
 		switch {
+		case messageFromClientProtobuf.Request.NewSignedPreKey != nil :
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" messageFromClientProtobuf.Request.NewSignedPreKey event : "+strconv.Itoa(eventsProcessed)))
+			} // if production == "")
+			persistSignedPreKeyFromClientErr := a.persistSignedPreKeyFromClient(messageFromClientProtobuf.Request.NewSignedPreKey)
+			if persistSignedPreKeyFromClientErr == nil {
+				if confirmationErr := sendConfirmationToClient(messageFromClientProtobuf.RequestID, a.websocketConnection); confirmationErr != nil {
+					return messageFromClientProtobuf.RequestID, confirmationErr
+				} // if confirmationErr
+				// If we are not in a production environment, verbose log the signedPreKey persistance
+				if production == "" {
+					logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Persisted signedPreKey with id : "+fmt.Sprint(messageFromClientProtobuf.Request.NewSignedPreKey.TimeStamp)+" which belongs to : "+hex.EncodeToString(messageFromClientProtobuf.Request.NewSignedPreKey.IdentityKey)))
+				} // if production == ""
+			} // if persistSignedPreKeyFromClientErr == nil
+			return messageFromClientProtobuf.RequestID, persistSignedPreKeyFromClientErr	
+		case messageFromClientProtobuf.Request.SignedPreKey != nil :
+			a.encounteredError = errors.New("Use .Request.NewSignedPreKey (type PreKey) instead of Request.SignedPreKey (type []byte)")
+			a.sendErrorToClient(messageFromClientProtobuf.RequestID)
 		case messageFromClientProtobuf.Request.Messages != nil:
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" messageFromClientProtobuf.Request.Messages event : "+strconv.Itoa(eventsProcessed)))
+			} // if production == "")
 			for _, singleMessage := range messageFromClientProtobuf.Request.Messages {
 				// Store the intendedMessageReciepint in a variable to avoid calling hex.EncodeToString multiple times
 				intendedMessageReciepient := hex.EncodeToString(singleMessage.Receiver)
@@ -296,11 +328,6 @@ func (a *authenticatedClientFirestore) processEvent(eventsProcessed int) error {
 					if production == "" {
 						logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Attempting to send a real time message to : "+intendedMessageReciepient))
 					} // if production == ""
-					// Echo the received messages back to the message sender so that we confirm that we handled them corectly
-					if echoMessagesBackToClientErr := a.echoMessagesBackToClient(messageFromClientProtobuf.Request.Messages); echoMessagesBackToClientErr != nil {
-						// If there is an error in confirming that the messages were handled correctly, just log the error as we already have the messages
-						logError(syslog.LOG_ERR, echoMessagesBackToClientErr)
-					} // if echoMessagesBackToClientErr
 					// // Attempt to send the messages messages in real time to the intendedMessageRecipient, in case of an error
 					if writeMessageErr := websocketConnectionMessageRecipient.WriteMessage(gorillaWebSocket.BinaryMessage, messageFromClientBytes); writeMessageErr != nil {
 						// Log the error and continue persisting the message to the backend
@@ -311,13 +338,19 @@ func (a *authenticatedClientFirestore) processEvent(eventsProcessed int) error {
 							logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Not persisting message on backend as successfuly sent it in real time to : "+intendedMessageReciepient))
 						} // if production == ""
 						// Return nil and don't persist the message to the backend
-						return writeMessageErr
+						if confirmationErr := sendConfirmationToClient(messageFromClientProtobuf.RequestID, a.websocketConnection); confirmationErr != nil {
+							return messageFromClientProtobuf.RequestID, confirmationErr
+						} // if confirmationErr
+						return  messageFromClientProtobuf.RequestID, writeMessageErr
 					} // else
 				} // if websocketConnectionMessageRecipient, exists
 			} // for _, singleMessage
 			persistChatMessagesFromClientErr := a.persistChatMessagesFromClient(messageFromClientProtobuf.Request.Messages)
 			// If there was no error while persisting the messages
 			if persistChatMessagesFromClientErr == nil {
+				if confirmationErr := sendConfirmationToClient(messageFromClientProtobuf.RequestID, a.websocketConnection); confirmationErr != nil {
+					return messageFromClientProtobuf.RequestID, confirmationErr
+				} // if confirmationErr
 				// For each message that was persisted
 				for _, singleMessageFromClient := range messageFromClientProtobuf.Request.Messages {
 					// If we are in dev mode, log each persisted event
@@ -327,19 +360,28 @@ func (a *authenticatedClientFirestore) processEvent(eventsProcessed int) error {
 				} // for singleMessageFromClient := range messageFromClientProtobuf.Request.Messages {
 			} // persistChatMessagesFromClientErr
 			// If there is an error while reading the message from client
-			return persistChatMessagesFromClientErr
+			return messageFromClientProtobuf.RequestID, persistChatMessagesFromClientErr
 		// @TODO wait for @Gross input on message states
 		case messageFromClientProtobuf.Request.MessageStateChange != nil:
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" messageFromClientProtobuf.Request.MessageStateChange event : "+strconv.Itoa(eventsProcessed)))
+			} // if production == "")
 			fmt.Println(messageFromClientProtobuf.Request.MessageStateChange, "MessageStateChange")
 		case messageFromClientProtobuf.Request.NewOneTimePreKeys != 0:
-			return errors.New("Only backend is allowed to request NewOneTimePreKeys")
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" messageFromClientProtobuf.Request.NewOneTimePreKeys event : "+strconv.Itoa(eventsProcessed)))
+			} // if production == "")
+			return messageFromClientProtobuf.RequestID, errors.New("Only backend is allowed to request NewOneTimePreKeys")
 		case messageFromClientProtobuf.Request.PreKeyBundle != nil:
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" messageFromClientProtobuf.Request.PreKeyBundle event : "+strconv.Itoa(eventsProcessed)))
+			} // if production == "")
 			// Create a new instance of authenticatedClientFirestore to assist us with fetching the requested preKeyBundle
 			authenticatedClientForPreKeyBundle := authenticatedClientFirestore{}
 			// Use the already existing websocket connection which is expecting a respond to their request for the preKeyBundle
 			authenticatedClientForPreKeyBundle.websocketConnection = a.websocketConnection
 			// Requesting a pre key bundle consumes a oneTimePreKey thus we note it down
-			usedOneTimePreKey, deliverRequestedPreKeyBundleErr := authenticatedClientForPreKeyBundle.deliverRequestedPreKeyBundle(messageFromClientProtobuf.Request.PreKeyBundle)
+			usedOneTimePreKey, deliverRequestedPreKeyBundleErr := authenticatedClientForPreKeyBundle.deliverRequestedPreKeyBundle(messageFromClientProtobuf.Request.PreKeyBundle, messageFromClientProtobuf.RequestID)
 			// If there was no error while delivering the preKeyBundle, delete the consumed oneTimePreKey
 			if deliverRequestedPreKeyBundleErr == nil {
 				if production == "" {
@@ -349,21 +391,32 @@ func (a *authenticatedClientFirestore) processEvent(eventsProcessed int) error {
 				// Delete the oneTimePreKey which got consumed
 				authenticatedClientForPreKeyBundle.deleteFieldFromStorage("oneTimePreKeys", usedOneTimePreKey)
 			} // if deliverRequestedPreKeyBundleErr
-			return deliverRequestedPreKeyBundleErr
+			return messageFromClientProtobuf.RequestID, deliverRequestedPreKeyBundleErr
 		case messageFromClientProtobuf.Request.Auth != nil:
-			return errors.New("Backend should request authentication, not the client")
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" messageFromClientProtobuf.Request.Auth event : "+strconv.Itoa(eventsProcessed)))
+			} // if production == "")
+			return messageFromClientProtobuf.RequestID, errors.New("Backend should request authentication, not the client")
 		} // Inner switch {
 	// If the message is a response
 	case messageFromClientProtobuf.Response != nil:
 		// Inner switch in case we have a Response from client, cases are valid if they are true
 		switch {
 		case messageFromClientProtobuf.Response.Auth != nil:
-			return errors.New("Authentication should not be handled here")
-
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" messageFromClientProtobuf.Response.Auth event : "+strconv.Itoa(eventsProcessed)))
+			} // if production == "")
+			return messageFromClientProtobuf.RequestID, errors.New("Authentication should not be handled here")
 		case messageFromClientProtobuf.Response.OneTimePrekeys != nil:
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" messageFromClientProtobuf.Response.OneTimePrekeys event : "+strconv.Itoa(eventsProcessed)))
+			} // if production == "")
 			persistOneTimePreKeysFromClientErr := a.persistOneTimePreKeysFromClient(messageFromClientProtobuf.Response.OneTimePrekeys)
 			// If no error was encountered while persisting the oneTimePreKeys from the client
 			if persistOneTimePreKeysFromClientErr == nil {
+				if confirmationErr := sendConfirmationToClient(messageFromClientProtobuf.RequestID, a.websocketConnection); confirmationErr != nil {
+					return messageFromClientProtobuf.RequestID, confirmationErr
+				} // if confirmationErr
 				// If we are not in a production environment, verbose log each oneTimePreKey persistance
 				if production == "" {
 					for _, oneTimePreKeyFromClient := range messageFromClientProtobuf.Response.OneTimePrekeys {
@@ -371,39 +424,59 @@ func (a *authenticatedClientFirestore) processEvent(eventsProcessed int) error {
 					} //for _, oneTimePreKeyFromClient := range messageFromClientProtobuf.Response.OneTimePrekeys {
 				} // if production == ""
 			} // if persistOneTimePreKeysFromClient == nil
-			return persistOneTimePreKeysFromClientErr
+			return messageFromClientProtobuf.RequestID, persistOneTimePreKeysFromClientErr
 		case messageFromClientProtobuf.Response.PreKeyBundle != nil:
-			return errors.New("Only backend is allowed to provide a PreKeyBundle")
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" messageFromClientProtobuf.Response.PreKeyBundle event : "+strconv.Itoa(eventsProcessed)))
+			} // if production == "")
+			return messageFromClientProtobuf.RequestID, errors.New("Only backend is allowed to provide a PreKeyBundle")
 		case messageFromClientProtobuf.Response.SignedPreKey != nil:
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" messageFromClientProtobuf.Response.SignedPreKey event : "+strconv.Itoa(eventsProcessed)))
+			} // if production == "")
 			persistSignedPreKeyFromClientErr := a.persistSignedPreKeyFromClient(messageFromClientProtobuf.Response.SignedPreKey)
 			if persistSignedPreKeyFromClientErr == nil {
+				if confirmationErr := sendConfirmationToClient(messageFromClientProtobuf.RequestID, a.websocketConnection); confirmationErr != nil {
+					return messageFromClientProtobuf.RequestID, confirmationErr
+				} // if confirmationErr
 				// If we are not in a production environment, verbose log the signedPreKey persistance
 				if production == "" {
 					logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" Persisted signedPreKey with id : "+fmt.Sprint(messageFromClientProtobuf.Response.SignedPreKey.TimeStamp)+" which belongs to : "+hex.EncodeToString(messageFromClientProtobuf.Response.SignedPreKey.IdentityKey)))
 				} // if production == ""
 			} // if persistSignedPreKeyFromClientErr == nil
-			return persistSignedPreKeyFromClientErr
+			return messageFromClientProtobuf.RequestID, persistSignedPreKeyFromClientErr
 		} // Inner switch in case we have a Response from client
 
 	// The only time it should reach the default case is when both messageFromClientProtobuf.Request == nil && messageFromClientProtobuf.Response == nil
 	default:
+		if production == "" {
+			logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+" default event : "+strconv.Itoa(eventsProcessed)))
+		} // if production == "")
 		if messageFromClientProtobuf.Error != "" {
-			return errors.New(messageFromClientProtobuf.Error)
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+` default messageFromClientProtobuf.Error != "" : `+strconv.Itoa(eventsProcessed)))
+			} // if production == "")
+			return messageFromClientProtobuf.RequestID, errors.New(messageFromClientProtobuf.Error)
 		}
 
 		if messageFromClientProtobuf.RequestID != "" {
-			// @TODO RESPOND TO THIS REQUEST
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+` default messageFromClientProtobuf.RequestID != "" : `+strconv.Itoa(eventsProcessed)))
+			} // if production == "")
 		}
 
 		if messageFromClientProtobuf.RequestID == "" {
+			if production == "" {
+				logError(syslog.LOG_INFO, errors.New(a.authenticatedIdentityPublicKeyHex+` default messageFromClientProtobuf.RequestID == "" : `+strconv.Itoa(eventsProcessed)))
+			} // if production == "")
 			a.websocketConnection.Close()
 			delete(authenticatedClientWebSocketConnectionMap, a.authenticatedIdentityPublicKeyHex)
 		}
 	}
-	return nil
+	return messageFromClientProtobuf.RequestID, nil
 } // func processEvent
 
-func (a *authenticatedClientFirestore) deliverRequestedPreKeyBundle(requestedPreKeyBundle []byte) (string, error) {
+func (a *authenticatedClientFirestore) deliverRequestedPreKeyBundle(requestedPreKeyBundle []byte, clientRequestID string) (string, error) {
 	// Set the authenticatedIdentityPublicKeyHex to the identityPublicKeyHex of the client that we should obtain a preKeyBundle for
 	a.authenticatedIdentityPublicKeyHex = hex.EncodeToString(requestedPreKeyBundle)
 	// Get the data from storage related to the identityPublicKeyHex of the client that we should obtain a preKeyBundle for
@@ -414,6 +487,8 @@ func (a *authenticatedClientFirestore) deliverRequestedPreKeyBundle(requestedPre
 	var messageToClientProtobufErr error
 	// Initialize an empty variable to hold the protobuf message
 	var messageToClientProtobuf backendProtobuf.BackendMessage
+	// Use the same requestID from the client in our response
+	messageToClientProtobuf.RequestID = clientRequestID
 	// Initialize an empty Response structure which would hold our response to the client
 	messageToClientProtobuf.Response = &backendProtobuf.BackendMessage_Response{}
 	// Initialize an empty PreKeyBundle structure which would hold the requested PreKeyBundle if it exists
@@ -445,12 +520,7 @@ func (a *authenticatedClientFirestore) deliverRequestedPreKeyBundle(requestedPre
 	messageToClientProtobufBytes, messageToClientProtobufErr = golangProto.Marshal(&messageToClientProtobuf)
 	// If there is an error while trying to perform protobuf marshaling
 	if messageToClientProtobufErr != nil {
-		// Initialise an empty message structure with the hopes that it will marshal correctly if it's empty
-		messageToClientProtobuf = backendProtobuf.BackendMessage{}
-		// Fill in the error field in the message to client with the error that occured
-		messageToClientProtobuf.Error = messageToClientProtobufErr.Error()
-		// Attempt to marshal the message structure again so that we can send it over the websocket connection
-		messageToClientProtobufBytes, messageToClientProtobufErr = golangProto.Marshal(&messageToClientProtobuf)
+		return "", messageToClientProtobufErr
 	} // if protobufMessageToClientErr != nil {
 	// Send our message over the websocket connection
 	// Restore the temporary snapshot of the original authenticatedClientFirestore
@@ -467,6 +537,8 @@ func (a authenticatedClientFirestore) deliverMessages(messagesToBeDelivered [][]
 	var messageToClientProtobuf backendProtobuf.BackendMessage
 	// Initialize the Request portion of the message
 	messageToClientProtobuf.Request = &backendProtobuf.BackendMessage_Request{}
+	// Add a unique request id 
+	messageToClientProtobuf.RequestID = uuid.NewV4().String()
 	// Initialize the ChatMessage portion of the Request
 	messageToClientProtobuf.Request.Messages = []*backendProtobuf.ChatMessage{}
 	// Iterate over all of the pending messages
@@ -485,7 +557,7 @@ func (a authenticatedClientFirestore) deliverMessages(messagesToBeDelivered [][]
 	// If we encounter an error while marshaling the protobuf message structure
 	if messageToClientProtobufErr != nil {
 		return messageToClientProtobufErr
-	}
+	} // if messageToClientProtobufErr
 	// Send the mashalled protobuf message structure over the websocket connection
 	if writeMessageErr := a.websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientProtobufBytes); writeMessageErr != nil {
 		return writeMessageErr
@@ -493,7 +565,7 @@ func (a authenticatedClientFirestore) deliverMessages(messagesToBeDelivered [][]
 	return nil
 } // func deliverMessages
 
-func requestAuth(websocketConnection *gorillaWebSocket.Conn) ([]byte, error) {
+func requestAuth(websocketConnection *gorillaWebSocket.Conn) ([]byte, string, error) {
 	// Initialize an empty Message structure
 	messageFromClient := backendProtobuf.BackendMessage{}
 	// Initialize an empty Response structure
@@ -502,13 +574,15 @@ func requestAuth(websocketConnection *gorillaWebSocket.Conn) ([]byte, error) {
 	messageToClient := backendProtobuf.BackendMessage{}
 	// Initialize an empty Request structure
 	messageToClient.Request = &backendProtobuf.BackendMessage_Request{}
+	// Add a unique request id 
+	messageToClient.RequestID = uuid.NewV4().String()
 	// Initialize an empty Auth structure
 	messageToClient.Request.Auth = &backendProtobuf.BackendMessage_Auth{}
 	// Create a byte slice to store our random bytes
 	backendRandomBytes := make([]byte, 4)
 	// Read random bytes into our slice, in case of an error, return it
 	if _, randomBytesErr := rand.Read(backendRandomBytes); randomBytesErr != nil {
-		return nil, randomBytesErr
+		return nil, messageToClient.RequestID, randomBytesErr
 	} // if randomBytesErr != nil
 	// Set the byte sequence that the client needs to sign
 	messageToClient.Request.Auth.ToSign = backendRandomBytes
@@ -516,62 +590,128 @@ func requestAuth(websocketConnection *gorillaWebSocket.Conn) ([]byte, error) {
 	messageToClientBytes, messageToClientBytesErr := golangProto.Marshal(&messageToClient)
 	// If there is an error while trying to perform protobuf marshaling, terminate the connection
 	if messageToClientBytesErr != nil {
-		return nil, messageToClientBytesErr
+		return nil, messageToClient.RequestID, messageToClientBytesErr
 	} // if messageToClientBytesErr != nil
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New("Sending .Auth.ToSign over websocket to client"))
+	} // if production == ""
 	// Send the protobuf data to the client containing the sequence of bytes he needs to sign
-	websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientBytes)
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New("Exact message sent : " + base64.StdEncoding.EncodeToString(messageToClientBytes)))
+	} // if production == ""
+	if writeMessageErr := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientBytes); writeMessageErr != nil {
+		return nil, messageToClient.RequestID, writeMessageErr
+	} // if writeMessageErr
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New("Sent .Auth.ToSign successfuly to client"))
+	} // if production == ""
 	// Read the response from the client which should contain his IdenetityPublicKey and the signed byte sequence
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New("About to read Auth response from client"))
+	} // if production == ""
 	_, messageFromClientProto, readMessageErr := websocketConnection.ReadMessage()
 	// In case of an error, terminate the connection
 	if readMessageErr != nil {
-		return nil, readMessageErr
+		return nil, messageToClient.RequestID, readMessageErr
 	}
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New("Successfully read Auth response from client"))
+	} // if production == ""
 	// Unmarshal the response from the client into our protobuf Auth structure, and in case of an error, terminate the connection
 	if protoUnmarshalErr := golangProto.Unmarshal(messageFromClientProto, &messageFromClient); protoUnmarshalErr != nil {
-		return nil, protoUnmarshalErr
+		return nil, messageToClient.RequestID, protoUnmarshalErr
 	} // if protoUnmarshalErr
 	// Create a [32]byte{} identityPublicKey to satisfy cryptoEd25519.Verify() type requirements
 	identityPublicKey := [32]byte{}
 	// Create a [64]byte{} byteSequenceToSignSignature to satisfy cryptoEd25519.Verify() type requirements
 	byteSequenceToSignSignature := [64]byte{}
+	// Make sure that Auth has be filled by client to avoid potential panics
+	if messageFromClient.Response.Auth == nil {
+		return nil, messageToClient.RequestID, errors.New("Auth must not be empty")
+	} // if messageFromClient.Response.Auth
 	// Create a string representation of the Identity Public Key
 	identityPublicKeyBytes := messageFromClient.Response.Auth.IdentityPublicKey
-	// Decode the hex representation of the identityPublicKey here as transmitting it over the network without hex encoding can cause issues with some clients
 	// Get the byte sequence which was signed by the client
 	byteSequenceThatClientSigned := messageFromClient.Response.Auth.ToSign
 	if len(byteSequenceThatClientSigned) != 8 {
-		return nil, errors.New("Signed byte sequence should be exactly 8 bytes")
+		return nil, messageToClient.RequestID, errors.New("Signed byte sequence should be exactly 8 bytes")
 	} // if len(byteSequenceThatClientSigned) != 8
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New("OK Auth response from client has exactly 8 bytes"))
+	} // if production == ""
 	// Check if the byte sequence that was signed by the client contains the initial bytes we sent to the client
 	if !bytes.HasPrefix(byteSequenceThatClientSigned, backendRandomBytes) {
 		// If the client has modified the bytes we sent, return an error pointing out that this behavior is not allowed
-		return nil, errors.New("Client is only allowed to append a byte sequence, and not to modify the one which was sent")
-	}
+		return nil, messageToClient.RequestID, errors.New("Client is only allowed to append a byte sequence, and not to modify the one which was sent")
+	} // if !bytes.HasPrefix
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New("OK Auth response from client appended 4 bytes"))
+	} // if production == ""
 	// Make sure that the identityPublicKey is exactly 32 bytes
 	if len(identityPublicKeyBytes) != 32 {
-		return nil, errors.New("identityPublicKey should be exactly 32 bytes")
+		return nil, messageToClient.RequestID, errors.New("identityPublicKey should be exactly 32 bytes")
 	} // if len(identityPublicKey) != 32
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New("OK Auth response from client identityPublicKey is exactly 32 bytes"))
+	} // if production == ""
 	// Fill the newly created identityPublicKey with the hex decoded representation of the IdentityPublicKey contained in the response from the client
 	copy(identityPublicKey[:], identityPublicKeyBytes)
 	// Make sure that the Signature is exactly 64 bytes
 	if len(messageFromClient.Response.Auth.Signature) != 64 {
-		return nil, errors.New("Signature should be exactly 64 bytes")
+		return nil, messageToClient.RequestID, errors.New("Signature should be exactly 64 bytes")
 	} // if len(messageFromClient.Response.Auth.Signature) != 32
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New("OK Auth response from client Signature is exactly 64 bytes"))
+	} // if production == ""
 	// Fill the newly created byteSequenceToSignSignature with the Signature contained in the response from the client
 	copy(byteSequenceToSignSignature[:], messageFromClient.Response.Auth.Signature)
 	// Verify the validity of the signature using cryptoEd25519.Verify()
 	if cryptoEd25519.Verify(identityPublicKey[:], byteSequenceThatClientSigned, byteSequenceToSignSignature[:]) {
-		// If the signed byte sequence from client has a valid signature, echo the authentication attempt back to the client so that he knows it was successful
-		if writeMessageError := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageFromClientProto); writeMessageError != nil {
-			return nil, writeMessageError
-		} // if writeMessageError
+		if production == "" {
+			logError(syslog.LOG_INFO, errors.New("OK Auth signature was verified, echoing authentication attempt back to the client so that he knows it was successful"))
+		} // if production == ""
+		// Send confirmation to the client
+		if confirmationErr := sendConfirmationToClient(messageToClient.RequestID, websocketConnection); confirmationErr != nil {
+			return nil, messageToClient.RequestID, confirmationErr
+		} // if confirmationErr
+		if production == "" {
+			logError(syslog.LOG_INFO, errors.New("OK Auth echoing authentication attempt succeeded"))
+		} // if production == ""
 		// Return the identityPublicKey of the authenticated client
-		return identityPublicKeyBytes, nil
+		return identityPublicKeyBytes, messageToClient.RequestID, nil 
 	} // if cryptoEd25519.Verify
 	// If cryptoEd25519.Verify() failed to verify the signature, return a matching reponse
-	return nil, errors.New("Invalid Signature")
+	return nil, messageToClient.RequestID, errors.New("Invalid Signature")
 } // func requestAuth
 
+func sendConfirmationToClient(requestID string, websocketConnection *gorillaWebSocket.Conn) error {
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New("Trying to send confirmation to client that there wasn't an error while processing " + requestID))
+	} // if production == ""
+	// Create a structure to send to client
+	var messageToClientProtobuf backendProtobuf.BackendMessage
+	// Set the request id which completeed successfully
+	messageToClientProtobuf.RequestID =  requestID
+	// Marshal using protobuf to conform to what client is expecting from us
+	messageToClientProtobufBytes, messageToClientProtobufBytesErr := golangProto.Marshal(&messageToClientProtobuf);
+	if messageToClientProtobufBytesErr != nil {
+		return messageToClientProtobufBytesErr
+		if production == "" {
+			logError(syslog.LOG_INFO, errors.New("Protobuf marshal error encountered while sending confirmation to client in regards to " + requestID))
+		} // if production == ""
+	} // if messageToClientProtobufBytes
+	// Send the .RequestID back to the client so that he knows it was successful
+	if writeMessageError := websocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToClientProtobufBytes); writeMessageError != nil {
+		if production == "" {
+			logError(syslog.LOG_INFO, errors.New("WriteMessageError encountered while sending confirmation to client in regards to  " + requestID))
+		} // if production == ""
+		return writeMessageError
+	} // if writeMessageError
+	if production == "" {
+		logError(syslog.LOG_INFO, errors.New("Successfully sent confirmation to client that there wasn't an error while processing " + requestID))
+	} // if production == ""
+	return nil
+} // func sendConfirmationToClient
 func logError(priority syslog.Priority, err error) {
 	// If the environment variable for the papertrail url is not set
 	if papertrailURL == "" {

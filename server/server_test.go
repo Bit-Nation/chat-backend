@@ -60,7 +60,7 @@ func TestHandleWebSocketConnection(t *testing.T) {
 		"Earth",
 		"base64",
 		"amazing surprise admit live basic outside people echo fault come interest flat awesome dragon share reason suggest scatter project omit daring business push afford",
-		"ws://127.0.0.1:"+listenPort+"/chat",
+		"ws://127.0.0.1:" + listenPort + "/chat",
 		"super_secure_over_9000",
 		oneTimePreKeysReceiver,
 		signedPreKeyReceiver,
@@ -71,7 +71,7 @@ func TestHandleWebSocketConnection(t *testing.T) {
 		"Earth",
 		"base64",
 		"amazing surprise admit live basic outside people echo fault come interest flat awesome dragon share reason suggest scatter project omit daring business push afford",
-		"ws://127.0.0.1:"+listenPort+"/chat",
+		"ws://127.0.0.1:" + listenPort + "/chat",
 		"super_secure_over_9000",
 		oneTimePreKeysReceiver,
 		signedPreKeyReceiver,
@@ -83,17 +83,18 @@ func TestHandleWebSocketConnection(t *testing.T) {
 		"Earth",
 		"base64",
 		"crunch ahead select guess pledge bundle midnight gossip episode govern brick humor forest age inhale scatter fringe love brief cute since room orange couple",
-		"ws://127.0.0.1:"+listenPort+"/chat",
+		"ws://127.0.0.1:" + listenPort + "/chat",
 		"super_secure_over_9000",
 		[]bitnationX3dh.KeyPair{},
 		bitnationX3dh.KeyPair{},
 	)
 	// Upload a profile on the backend
+	time.Sleep(7 * time.Second)
 	putProfileOnBackend(t)
 	// Retreive a profile from the backend
 	getProfileFromBackend(t)
 	// Reciever needs to pass authentication
-	clientReceiver.testAuth(t)
+	//clientReceiver.testAuth(t)
 	// Receiver uploads the one time pre keys
 	clientReceiver.testUploadOneTimePreKeys(t)
 	// Receiver uploads the signed pre key
@@ -127,7 +128,7 @@ func TestHandleWebSocketConnection(t *testing.T) {
 	}()
 
 	// Initial message sender needs to pass authentication
-	clientSender.testAuth(t)
+	//clientSender.testAuth(t)
 	// Get a hex decoded byte representation of the identity public key for the initial message receiver that we want to chat with
 	identityPublicKeyBytes, identityPublicKeyBytesErr := hex.DecodeString("22cfd1af5798544287cbf7721a0a4ebc2506d6f4df05413355a7f5cc86740724")
 	testifyRequire.Nil(t, identityPublicKeyBytesErr)
@@ -140,7 +141,7 @@ func TestHandleWebSocketConnection(t *testing.T) {
 	// Initial message sender sends a message to the backend to get persisted
 	clientSender.testSendMessage(t, remotePreKeyBundlePublic)
 	// Receiver needs to pass auth again
-	clientReceiverRestartedApp.testAuth(t)
+	//clientReceiverRestartedApp.testAuth(t)
 	// Receiver receives any undelivered messages while he was offline
 	unreadChatMessages := clientReceiverRestartedApp.receiveUndeliveredMessages(t)
 	// Test if we can decrypt the message successfully
@@ -164,7 +165,7 @@ func putProfileOnBackend(t *testing.T) {
 	// Use an already base64 encoded Profile protobuf bytes to make testing simpler
 	profileBase64 := strings.NewReader(`CgNCb2ISBUVhcnRoGgZiYXNlNjQiICLP0a9XmFRCh8v3choKTrwlBtb03wVBM1Wn9cyGdAckKiECcFb7RfrdatrDp9TlXw1/nNU/cF1hoxaMCoEPY1a7c8QyIH7ffl1cs/4+0WzRS7j7c+Y2/moLUj0iLxgLKbqakcphOLTasdoFQAJKQDztvodZmPkxuEBra1RGXsMsyirTIajSuaN4rOoNMkOPB/8+RXFZKVOhkjkNTsSW+WU7dYExiaxC8Wi7KVOB5wNSQaxE7LN3oNBk1GUkmyYFaN5fWrYmTDe9iz39gWH6/gCLVuFwA1g4RpMnNoiD0rdIC+9AL6gUC8XMQKZuuKOY/QcB`)
 	// Create a new PUT request to put the profile in the storage
-	httpRequest, httpRequestErr := http.NewRequest("PUT", "http://127.0.0.1:"+listenPort+"/profile", profileBase64)
+	httpRequest, httpRequestErr := http.NewRequest("PUT", "http://127.0.0.1:" + listenPort + "/profile", profileBase64)
 	testifyRequire.Nil(t, httpRequestErr)
 	// Set bearer auth
 	httpRequest.Header.Set("Bearer", "super_secure_over_9000")
@@ -195,7 +196,7 @@ func getProfileFromBackend(t *testing.T) {
 	profileProtobufBytes, profileProtobufErr := base64.StdEncoding.DecodeString(profileBase64)
 	testifyRequire.Nil(t, profileProtobufErr)
 	// Create a new get request to get a profile from the backend
-	httpRequest, httpRequestErr := http.NewRequest("GET", "http://127.0.0.1:"+listenPort+"/profile", nil)
+	httpRequest, httpRequestErr := http.NewRequest("GET", "http://127.0.0.1:" + listenPort + "/profile", nil)
 	testifyRequire.Nil(t, httpRequestErr)
 
 	// Set bearer auth
@@ -237,11 +238,12 @@ func newStaticOneTimePreKeysReceiver() []bitnationX3dh.KeyPair {
 	return []bitnationX3dh.KeyPair{oneTimePreKeyReceiver}
 }
 
-func newWebSocketConnection(t *testing.T, websocketURL, bearer string) *gorillaWebSocket.Conn {
+func newWebSocketConnection(t *testing.T, websocketURL, bearer, identity string) *gorillaWebSocket.Conn {
 	// Setup custom headers to allow the Bearer token
 	customHeaders := http.Header{}
 	// Add the Bearer token to the custom headers
 	customHeaders.Add("Bearer", bearer)
+	customHeaders.Add("Identity", identity)
 	// Initialize a websocket dialer
 	websocketDialer := gorillaWebSocket.Dialer{}
 	// Initialize a websocket connection of a message sender
@@ -257,8 +259,6 @@ func newWebSocketConnection(t *testing.T, websocketURL, bearer string) *gorillaW
 	return websocketConnection
 }
 func newClient(t *testing.T, name, location, image, mnemonicString, websocketURL, bearer string, oneTimePreKeys []bitnationX3dh.KeyPair, signedPreKey bitnationX3dh.KeyPair) Client {
-	// Establish a new websocket connection
-	websocketConnection := newWebSocketConnection(t, websocketURL, bearer)
 	// Use the mnemonic string supplied
 	mnemonic, mnemonicErr := panthalassaMnemonic.FromString(mnemonicString)
 	testifyRequire.Nil(t, mnemonicErr)
@@ -267,6 +267,12 @@ func newClient(t *testing.T, name, location, image, mnemonicString, websocketURL
 	testifyRequire.Nil(t, keystoreErr)
 	// Create a new keymanager using the keyStore
 	keyManager := panthalassaKeyManager.CreateFromKeyStore(keyStore)
+	// Establish a new websocket connection
+	identityPublicKeySenderHex, identityPublicKeySenderHexErr := keyManager.IdentityPublicKey()
+	testifyRequire.Nil(t, identityPublicKeySenderHexErr)
+	bearerTokenSignature, bearerTokenSignatureErr := keyManager.IdentitySign([]byte(bearer))
+	testifyRequire.Nil(t, bearerTokenSignatureErr)
+	websocketConnection := newWebSocketConnection(t, websocketURL, base64.StdEncoding.EncodeToString(bearerTokenSignature), identityPublicKeySenderHex)
 	// Create a signed version of the profile
 	profileSigned, profileErr := panthalassaProfile.SignProfile(name, location, image, *keyManager)
 	testifyRequire.Nil(t, profileErr)
@@ -289,10 +295,13 @@ func newClient(t *testing.T, name, location, image, mnemonicString, websocketURL
 } // func newClient
 
 func (c *Client) testUploadOneTimePreKeys(t *testing.T) {
+	messageFromBackend := backendProtobuf.BackendMessage{}
 	// Initialize our Message structure to send a request to the backend
 	messageToBackendProtobuf := backendProtobuf.BackendMessage{}
 	// Initialize an empty Response structure
 	messageToBackendProtobuf.Response = &backendProtobuf.BackendMessage_Response{}
+	// Add the request id
+	messageToBackendProtobuf.RequestID = uuid.NewV4().String()
 	// For each oneTimePreKey
 	for _, oneTimePreKey := range c.OneTimePreKeys {
 		// Initialize an empty PreKey structure
@@ -318,23 +327,22 @@ func (c *Client) testUploadOneTimePreKeys(t *testing.T) {
 	// Send the message over the websocket connection
 	writeMessageError := c.WebSocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToBackendProtobufBytes)
 	testifyRequire.Nil(t, writeMessageError)
-	for _, oneTimePreKey := range messageToBackendProtobuf.Response.OneTimePrekeys {
-		// Read the response from the backend
-		_, messageFromBackendProtobufBytes, readMessageErr := c.WebSocketConnection.ReadMessage()
-		testifyRequire.Nil(t, readMessageErr)
-		// Marshal the one time pre key so that we can compare it with the backend response
-		oneTimePreKeyBytes, protoMarshalErr := golangProto.Marshal(oneTimePreKey)
-		testifyRequire.Nil(t, protoMarshalErr)
-		// Make sure the backend echoes back the oneTimePreKey we sent to confirm that the OneTimePreKeys were persisted
-		testifyRequire.Equal(t, messageFromBackendProtobufBytes, oneTimePreKeyBytes)
-	} // for _, oneTimePreKey
+	_, messageFromBackendProtobufBytes, readMessageErr := c.WebSocketConnection.ReadMessage()
+	testifyRequire.Nil(t, readMessageErr)
+	protoUnmarshalErr := golangProto.Unmarshal(messageFromBackendProtobufBytes, &messageFromBackend)
+	testifyRequire.Nil(t, protoUnmarshalErr)
+	testifyRequire.Equal(t, "", messageFromBackend.Error)
+	testifyRequire.Equal(t, messageFromBackend.RequestID, messageToBackendProtobuf.RequestID)
 } // testUploadOneTimePreKeys
 
 func (c *Client) testUploadSignedPreKey(t *testing.T) {
+	messageFromBackend := backendProtobuf.BackendMessage{}
 	// Initialize our Message structure to send a request to the backend
 	messageToBackendProtobuf := backendProtobuf.BackendMessage{}
+	// Add the request id
+	messageToBackendProtobuf.RequestID = uuid.NewV4().String()
 	// Initialize an empty Response structure
-	messageToBackendProtobuf.Response = &backendProtobuf.BackendMessage_Response{}
+	messageToBackendProtobuf.Request = &backendProtobuf.BackendMessage_Request{}
 	// Initialize an empty PreKey structure
 	preKeyProtobuf := backendProtobuf.PreKey{}
 	// Set the Key field in the PreKey structure to the PublicKey from the signedPreKey bitnationX3dh.KeyPair
@@ -350,7 +358,7 @@ func (c *Client) testUploadSignedPreKey(t *testing.T) {
 	// Set the IdentityKeySignature in the PreKey structure to the resulting signature of the IdentitySign process
 	preKeyProtobuf.IdentityKeySignature = identityKeySignature
 	// Append the PreKey structure to the message response we are about to send to the backend
-	messageToBackendProtobuf.Response.SignedPreKey = &preKeyProtobuf
+	messageToBackendProtobuf.Request.NewSignedPreKey = &preKeyProtobuf
 	// Use protobuf to marshal the message response we are about to send
 	messageToBackendProtobufBytes, messageToBackendProtobufBytesErr := golangProto.Marshal(&messageToBackendProtobuf)
 	testifyRequire.Nil(t, messageToBackendProtobufBytesErr)
@@ -360,14 +368,14 @@ func (c *Client) testUploadSignedPreKey(t *testing.T) {
 	// Read the response from the backend
 	_, messageFromBackendProtobufBytes, readMessageErr := c.WebSocketConnection.ReadMessage()
 	testifyRequire.Nil(t, readMessageErr)
-	// Marhsal the signedPreKey so that we can compare it with the backend response
-	signedPreKeyBytes, protoMarshalErr := golangProto.Marshal(&preKeyProtobuf)
-	testifyRequire.Nil(t, protoMarshalErr)
-	// Make sure the backend echoes back the signedPreKey we sent to confirm that the signedPreKey was persisted
-	testifyRequire.Equal(t, messageFromBackendProtobufBytes, signedPreKeyBytes)
+	protoUnmarshalErr := golangProto.Unmarshal(messageFromBackendProtobufBytes, &messageFromBackend)
+	testifyRequire.Nil(t, protoUnmarshalErr)
+	testifyRequire.Equal(t, "", messageFromBackend.Error)
+	testifyRequire.Equal(t, messageFromBackend.RequestID, messageToBackendProtobuf.RequestID)
 } // testUploadSignedPreKey
 
 func (c *Client) testSendMessage(t *testing.T, receiverPreKeyBundlePublic PreKeyBundlePublic) {
+	messageFromBackend := backendProtobuf.BackendMessage{}
 	// Initialize our Message structure to send a request to the backend
 	messageToBackendProto := backendProtobuf.BackendMessage{}
 	// Set a request id
@@ -458,16 +466,12 @@ func (c *Client) testSendMessage(t *testing.T, receiverPreKeyBundlePublic PreKey
 	writeMessageError := c.WebSocketConnection.WriteMessage(gorillaWebSocket.BinaryMessage, messageToBackendProtoBytes)
 	testifyRequire.Nil(t, writeMessageError)
 	// For each message that we are sending to the backend
-	for _, singleMessageToBackendProtobuf := range messageToBackendProto.Request.Messages {
-		// Marshal each message in protobuf bytes
-		messageToBackendProtobufBytes, singleMessageToBackendProtobufBytesErr := golangProto.Marshal(singleMessageToBackendProtobuf)
-		testifyRequire.Nil(t, singleMessageToBackendProtobufBytesErr)
-		// Read the response from the backend
-		_, messageFromBackendProtobufBytes, readMessageErr := c.WebSocketConnection.ReadMessage()
-		testifyRequire.Nil(t, readMessageErr)
-		// Make sure the backend echoes back the messages we sent to confirm that the messages was persisted
-		testifyRequire.Equal(t, messageFromBackendProtobufBytes, messageToBackendProtobufBytes)
-	} // for _, singleMessageToBackendProtobuf := range messageToBackendgolangProto.Request.Messages
+	_, messageFromBackendProtobufBytes, readMessageErr := c.WebSocketConnection.ReadMessage()
+	testifyRequire.Nil(t, readMessageErr)
+	protoUnmarshalErr := golangProto.Unmarshal(messageFromBackendProtobufBytes, &messageFromBackend)
+	testifyRequire.Nil(t, protoUnmarshalErr)
+	testifyRequire.Equal(t, "", messageFromBackend.Error)
+	testifyRequire.Equal(t, messageFromBackend.RequestID, messageToBackendProto.RequestID)
 } // func (c *Client) testSendMessage
 
 func (c *Client) testRequestPreKeyBundle(t *testing.T, preKeyBundleIdentifier []byte) PreKeyBundlePublic {
@@ -630,14 +634,14 @@ func (c *Client) testAuth(t *testing.T) {
 	messageToBackend.Response = &backendProtobuf.BackendMessage_Response{}
 	// Initialize an empty Auth structure
 	messageToBackend.Response.Auth = &backendProtobuf.BackendMessage_Auth{}
-	// Set the type of request we are replying to
-	messageToBackend.RequestID = uuid.NewV4().String()
 	// Read the data from the server which should contain the byte sequence we need to sign
 	_, messageFromBackendBytes, readMessageErr := c.WebSocketConnection.ReadMessage()
 	testifyRequire.Nil(t, readMessageErr)
 	// Unmarshal the data from the server into our Message structure
 	protoUnmarshalErr := golangProto.Unmarshal(messageFromBackendBytes, &messageFromBackend)
 	testifyRequire.Nil(t, protoUnmarshalErr)
+	// Set the id of request we are replying to
+	messageToBackend.RequestID = messageFromBackend.RequestID
 	// Create a byte slice to store our random bytes
 	clientRandomBytes := make([]byte, 4)
 	// Read random bytes into our slice
@@ -680,8 +684,11 @@ func (c *Client) testAuth(t *testing.T) {
 	// Read back the response from the backend
 	_, messageFromBackendBytes, readMessageErr = c.WebSocketConnection.ReadMessage()
 	testifyRequire.Nil(t, readMessageErr)
-	// Make sure the backend echoes back the authentication attempt as a means to confirm that it's successful
-	testifyRequire.Equal(t, messageToBackendBytes, messageFromBackendBytes)
+	// Make sure the backend sends us back the .RequestID as a means to confirm that it's successful
+	protoUnmarshalErr = golangProto.Unmarshal(messageFromBackendBytes, &messageFromBackend)
+	testifyRequire.Nil(t, protoUnmarshalErr)
+	testifyRequire.Equal(t, "", messageFromBackend.Error)
+	testifyRequire.Equal(t, messageToBackend.RequestID, messageFromBackend.RequestID)
 
 }
 
